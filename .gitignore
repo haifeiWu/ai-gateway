@@ -1,0 +1,22 @@
+# 二进制文件
+/gateway
+/mock-provider
+
+# 环境变量
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Go
+*.test
+*.out
+cover.html

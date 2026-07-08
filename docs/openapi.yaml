@@ -1,0 +1,1027 @@
+openapi: "3.0.3"
+info:
+  title: AI Gateway API
+  description: |
+    AI Gateway — 统一管理租户 API Key，代理 AI 模型请求并记录用量。
+
+    ## 鉴权方式
+    - **管理 API** (`/admin/v1/*`)：使用 Admin Token（Bearer Token）
+    - **代理 API** (`/v1/*`)：使用租户 API Key（Bearer Token，格式 `sk-agw-*`）
+
+    ## 错误格式
+    所有错误响应遵循 OpenAI 兼容格式：
+    ```json
+    {"error": {"message": "...", "type": "..."}}
+    ```
+  version: "1.0.0"
+
+servers:
+  - url: http://localhost:8080
+    description: 本地开发环境
+
+components:
+  securitySchemes:
+    AdminAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: token
+      description: 管理 API 鉴权 Token
+    APIKeyAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: API Key
+      description: 租户 API Key（格式 sk-agw-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx）
+
+  schemas:
+    Error:
+      type: object
+      required: [error]
+      properties:
+        error:
+          type: object
+          required: [message, type]
+          properties:
+            message:
+              type: string
+              description: 错误描述
+            type:
+              type: string
+              description: 错误类型
+              enum: [auth_error, forbidden, rate_limit, invalid_request_error, upstream_error, timeout, server_error, not_found]
+
+    Tenant:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        name:
+          type: string
+        status:
+          type: string
+          enum: [active, disabled]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    CreateTenantRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: 租户名称
+
+    UpdateTenantRequest:
+      type: object
+      description: |
+        更新租户请求。所有字段可选，仅更新提供的字段。
+        - name: 更新租户名称
+        - status: 启用/禁用租户
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        status:
+          type: string
+          enum: [active, disabled]
+
+    Scopes:
+      type: object
+      description: |
+        API Key 权限范围配置。所有字段为空/零值时表示不限制（最小权限可按需收紧）。
+      properties:
+        allowed_models:
+          type: array
+          maxItems: 50
+          items:
+            type: string
+          description: 允许调用的模型列表，空数组 = 全部允许
+          example: ["gpt-4", "gpt-3.5-turbo"]
+        allowed_endpoints:
+          type: array
+          maxItems: 20
+          items:
+            type: string
+          description: 允许调用的端点列表，空数组 = 全部允许
+          example: ["/v1/chat/completions", "/v1/embeddings"]
+        rate_limit_rpm:
+          type: integer
+          minimum: 0
+          description: 每分钟请求上限，0 = 不限
+          example: 100
+
+    CreateKeyRequest:
+      type: object
+      required: [name]
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+          description: Key 名称
+        scopes:
+          $ref: "#/components/schemas/Scopes"
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+          description: 过期时间（RFC3339），null = 永不过期
+          example: "2026-12-31T23:59:59Z"
+
+    CreateKeyResponse:
+      type: object
+      description: 创建 Key 响应，明文 key 仅此一次返回
+      properties:
+        id:
+          type: string
+          format: uuid
+        key:
+          type: string
+          description: 明文 API Key（仅此一次返回，后续不可获取）
+          example: "sk-agw-a1b2c3d4e5f6789012345678901234ab"
+        key_prefix:
+          type: string
+          description: Key 前缀（显示用，如 sk-agw-abcd****）
+          example: "sk-agw-a1b2****"
+        name:
+          type: string
+        scopes:
+          $ref: "#/components/schemas/Scopes"
+        status:
+          type: string
+          enum: [active, disabled]
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    APIKey:
+      type: object
+      description: API Key 详情（不含明文 key）
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        key_prefix:
+          type: string
+          example: "sk-agw-a1b2****"
+        name:
+          type: string
+        scopes:
+          $ref: "#/components/schemas/Scopes"
+        status:
+          type: string
+          enum: [active, disabled]
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    UpdateKeyRequest:
+      type: object
+      description: |
+        更新 Key 请求。所有字段可选，仅更新提供的字段。
+        - status: 启用/禁用 Key
+        - scopes: 更新权限范围
+        - expires_at: 设置/更新过期时间
+        - name: 更新 Key 名称
+      properties:
+        name:
+          type: string
+          minLength: 1
+          maxLength: 100
+        status:
+          type: string
+          enum: [active, disabled]
+        scopes:
+          $ref: "#/components/schemas/Scopes"
+        expires_at:
+          type: string
+          format: date-time
+          nullable: true
+
+    UsageSummary:
+      type: object
+      properties:
+        total_requests:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+
+    UsageGroup:
+      type: object
+      description: 分组聚合用量
+      properties:
+        model:
+          type: string
+        tenant_id:
+          type: string
+        date:
+          type: string
+        hour:
+          type: string
+        requests:
+          type: integer
+          format: int64
+        prompt_tokens:
+          type: integer
+          format: int64
+        completion_tokens:
+          type: integer
+          format: int64
+        total_tokens:
+          type: integer
+          format: int64
+
+    UsageResult:
+      type: object
+      properties:
+        summary:
+          $ref: "#/components/schemas/UsageSummary"
+        groups:
+          type: array
+          description: 分组聚合结果（仅当 group_by 指定时非空）
+          items:
+            $ref: "#/components/schemas/UsageGroup"
+        total:
+          type: integer
+          format: int64
+          description: 分组总数（用于分页）
+        page:
+          type: integer
+          description: 当前页码
+        page_size:
+          type: integer
+          description: 每页条数
+
+    UsageRecord:
+      type: object
+      description: 单条用量记录（内部数据模型）
+      properties:
+        id:
+          type: string
+          format: uuid
+        tenant_id:
+          type: string
+          format: uuid
+        key_id:
+          type: string
+          format: uuid
+        model:
+          type: string
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+        request_id:
+          type: string
+        status_code:
+          type: integer
+          description: HTTP 状态码
+        latency_ms:
+          type: integer
+          description: 请求延迟（毫秒）
+        created_at:
+          type: string
+          format: date-time
+          description: 请求时间戳
+
+    ChatCompletionRequest:
+      type: object
+      required: [model, messages]
+      properties:
+        model:
+          type: string
+          description: 模型 ID
+          example: "gpt-4"
+        messages:
+          type: array
+          items:
+            type: object
+            required: [role, content]
+            properties:
+              role:
+                type: string
+                enum: [system, user, assistant]
+              content:
+                type: string
+        temperature:
+          type: number
+          minimum: 0
+          maximum: 2
+          description: 采样温度（透传至下游，MVP 不校验）
+          nullable: true
+        max_tokens:
+          type: integer
+          minimum: 1
+          description: 最大生成 token 数（透传至下游，MVP 不校验）
+          nullable: true
+        stream:
+          type: boolean
+          description: 是否流式返回（MVP 下游不支持流式，传 true 时返回普通 JSON 响应）
+          default: false
+
+    ChatCompletionResponse:
+      type: object
+      description: OpenAI 兼容的 chat completion 响应
+      properties:
+        id:
+          type: string
+          example: "chatcmpl-mock-20260708120000"
+        object:
+          type: string
+          example: "chat.completion"
+        created:
+          type: integer
+          format: int64
+          description: Unix 时间戳
+        model:
+          type: string
+        choices:
+          type: array
+          items:
+            type: object
+            properties:
+              index:
+                type: integer
+              message:
+                type: object
+                properties:
+                  role:
+                    type: string
+                  content:
+                    type: string
+              finish_reason:
+                type: string
+        usage:
+          $ref: "#/components/schemas/TokenUsage"
+
+    TokenUsage:
+      type: object
+      description: Token 用量信息
+      properties:
+        prompt_tokens:
+          type: integer
+        completion_tokens:
+          type: integer
+        total_tokens:
+          type: integer
+
+    EmbeddingRequest:
+      type: object
+      required: [model, input]
+      properties:
+        model:
+          type: string
+          example: "text-embedding-ada-002"
+        input:
+          type: string
+          description: 要嵌入的文本
+
+    EmbeddingResponse:
+      type: object
+      description: OpenAI 兼容的 embedding 响应
+      properties:
+        object:
+          type: string
+          example: "list"
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              object:
+                type: string
+                example: "embedding"
+              index:
+                type: integer
+              embedding:
+                type: array
+                items:
+                  type: number
+                description: 嵌入向量（1536 维）
+        model:
+          type: string
+        usage:
+          $ref: "#/components/schemas/TokenUsage"
+
+    ModelsResponse:
+      type: object
+      properties:
+        object:
+          type: string
+          example: "list"
+        data:
+          type: array
+          items:
+            type: object
+            properties:
+              id:
+                type: string
+              object:
+                type: string
+                example: "model"
+              created:
+                type: integer
+                format: int64
+              owned_by:
+                type: string
+
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: "ok"
+
+  responses:
+    BadRequest:
+      description: 请求参数错误
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              message: "invalid request body"
+              type: "invalid_request_error"
+    Unauthorized:
+      description: 认证失败
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              message: "invalid API key"
+              type: "auth_error"
+    Forbidden:
+      description: 权限不足
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              message: "model not allowed"
+              type: "forbidden"
+    NotFound:
+      description: 资源不存在
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              message: "tenant not found"
+              type: "not_found"
+    RateLimited:
+      description: 请求过多
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              message: "rate limit exceeded"
+              type: "rate_limit"
+    UpstreamError:
+      description: 下游服务错误（502）
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              message: "upstream error"
+              type: "upstream_error"
+    Timeout:
+      description: 下游服务超时（504）
+      content:
+        application/json:
+          schema:
+            $ref: "#/components/schemas/Error"
+          example:
+            error:
+              message: "upstream timeout"
+              type: "timeout"
+
+paths:
+  # ===== 健康检查 =====
+  /health:
+    get:
+      summary: 健康检查
+      tags: [System]
+      security: []
+      responses:
+        "200":
+          description: 服务正常
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/HealthResponse"
+
+  # ===== 管理 API =====
+  /admin/v1/tenants:
+    post:
+      summary: 创建租户
+      tags: [Admin - Tenant]
+      security:
+        - AdminAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateTenantRequest"
+      responses:
+        "201":
+          description: 创建成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    get:
+      summary: 列出租户
+      tags: [Admin - Tenant]
+      security:
+        - AdminAuth: []
+      responses:
+        "200":
+          description: 租户列表
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/Tenant"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/v1/tenants/{id}:
+    get:
+      summary: 获取租户详情
+      tags: [Admin - Tenant]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: 租户详情
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    patch:
+      summary: 更新租户（名称/状态）
+      tags: [Admin - Tenant]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateTenantRequest"
+      responses:
+        "200":
+          description: 更新后的租户
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/Tenant"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      summary: 删除租户
+      tags: [Admin - Tenant]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "deleted"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/v1/tenants/{id}/keys:
+    post:
+      summary: 创建 API Key
+      tags: [Admin - Key]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          description: 租户 ID
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/CreateKeyRequest"
+      responses:
+        "201":
+          description: 创建成功，明文 key 仅此一次返回
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/CreateKeyResponse"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    get:
+      summary: 列出租户的 API Key
+      tags: [Admin - Key]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Key 列表（不含明文 key）
+          content:
+            application/json:
+              schema:
+                type: array
+                items:
+                  $ref: "#/components/schemas/APIKey"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/v1/keys/{id}:
+    get:
+      summary: 获取 Key 详情
+      tags: [Admin - Key]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: Key 详情（不含明文 key）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIKey"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "404":
+          $ref: "#/components/responses/NotFound"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    patch:
+      summary: 更新 Key（启用/禁用/scope/过期/名称）
+      tags: [Admin - Key]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/UpdateKeyRequest"
+      responses:
+        "200":
+          description: 更新后的 Key
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/APIKey"
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+    delete:
+      summary: 删除 Key
+      tags: [Admin - Key]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        "200":
+          description: 删除成功
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: "deleted"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  /admin/v1/usage:
+    get:
+      summary: 查询用量
+      tags: [Admin - Usage]
+      security:
+        - AdminAuth: []
+      parameters:
+        - name: tenant_id
+          in: query
+          description: 按租户过滤
+          schema:
+            type: string
+            format: uuid
+        - name: key_id
+          in: query
+          description: 按API Key过滤
+          schema:
+            type: string
+            format: uuid
+        - name: model
+          in: query
+          description: 按模型过滤
+          schema:
+            type: string
+        - name: start
+          in: query
+          description: 起始时间（RFC3339，如 2026-07-01T00:00:00Z）
+          schema:
+            type: string
+            format: date-time
+        - name: end
+          in: query
+          description: 结束时间（RFC3339）
+          schema:
+            type: string
+            format: date-time
+        - name: group_by
+          in: query
+          description: 分组维度
+          schema:
+            type: string
+            enum: [model, day, hour, tenant]
+        - name: page
+          in: query
+          description: 页码（默认 1）
+          schema:
+            type: integer
+            minimum: 1
+            default: 1
+        - name: page_size
+          in: query
+          description: 每页条数（默认 20，最大 100）
+          schema:
+            type: integer
+            minimum: 1
+            maximum: 100
+            default: 20
+        - name: format
+          in: query
+          description: 导出格式（默认 json）
+          schema:
+            type: string
+            enum: [json, csv]
+      responses:
+        "200":
+          description: 用量汇总（format=json）或 CSV 文件（format=csv）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/UsageResult"
+              example:
+                summary:
+                  total_requests: 150
+                  total_tokens: 45000
+                groups:
+                  - model: "gpt-4"
+                    requests: 100
+                    prompt_tokens: 20000
+                    completion_tokens: 15000
+                    total_tokens: 35000
+                  - model: "gpt-3.5-turbo"
+                    requests: 50
+                    prompt_tokens: 5000
+                    completion_tokens: 5000
+                    total_tokens: 10000
+                total: 2
+                page: 1
+                page_size: 20
+            text/csv:
+              schema:
+                type: string
+              description: CSV 格式用量数据（含 summary + groups + pagination）
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+
+  # ===== 代理 API =====
+  /v1/chat/completions:
+    post:
+      summary: Chat Completions（OpenAI 兼容）
+      tags: [Proxy]
+      security:
+        - APIKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/ChatCompletionRequest"
+      responses:
+        "200":
+          description: |
+            成功。
+            - stream=false（默认）：返回 JSON 格式 ChatCompletionResponse
+            - stream=true：返回 SSE 事件流（text/event-stream）
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ChatCompletionResponse"
+            text/event-stream:
+              schema:
+                type: string
+              description: SSE 事件流，格式为 data: <json>，以 data: [DONE] 结束
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+                format: uuid
+              description: 请求追踪 ID（UUID）
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "504":
+          $ref: "#/components/responses/Timeout"
+
+  /v1/embeddings:
+    post:
+      summary: Embeddings（OpenAI 兼容）
+      tags: [Proxy]
+      security:
+        - APIKeyAuth: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/EmbeddingRequest"
+      responses:
+        "200":
+          description: 成功
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/EmbeddingResponse"
+          headers:
+            X-Request-ID:
+              schema:
+                type: string
+              description: 请求追踪 ID（UUID）
+        "400":
+          $ref: "#/components/responses/BadRequest"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "502":
+          $ref: "#/components/responses/UpstreamError"
+        "504":
+          $ref: "#/components/responses/Timeout"
+
+  /v1/models:
+    get:
+      summary: 列出可用模型
+      tags: [Proxy]
+      security:
+        - APIKeyAuth: []
+      responses:
+        "200":
+          description: 模型列表
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ModelsResponse"
+        "401":
+          $ref: "#/components/responses/Unauthorized"
+        "403":
+          $ref: "#/components/responses/Forbidden"
+        "429":
+          $ref: "#/components/responses/RateLimited"
+        "502":
+          $ref: "#/components/responses/UpstreamError"

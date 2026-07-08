@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>AI Gateway Dashboard</title>
+  <link rel="stylesheet" href="/dashboard/style.css">
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>AI Gateway</h1>
+      <div class="auth-section">
+        <input type="password" id="adminToken" placeholder="Admin Token" />
+        <button onclick="setToken()">认证</button>
+        <span id="authStatus"></span>
+      </div>
+    </header>
+
+    <nav class="tabs">
+      <button class="tab active" onclick="switchTab('tenants')">租户管理</button>
+      <button class="tab" onclick="switchTab('keys')">Key 管理</button>
+      <button class="tab" onclick="switchTab('usage')">用量查看</button>
+    </nav>
+
+    <!-- 租户管理 -->
+    <section id="tab-tenants" class="tab-content active">
+      <div class="panel">
+        <h2>创建租户</h2>
+        <div class="form-row">
+          <input type="text" id="tenantName" placeholder="租户名称" />
+          <button onclick="createTenant()">创建</button>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>租户列表</h2>
+        <table>
+          <thead><tr><th>ID</th><th>名称</th><th>状态</th><th>创建时间</th><th>操作</th></tr></thead>
+          <tbody id="tenantList"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- Key 管理 -->
+    <section id="tab-keys" class="tab-content">
+      <div class="panel">
+        <h2>创建 API Key</h2>
+        <div class="form-row">
+          <select id="keyTenant"></select>
+          <input type="text" id="keyName" placeholder="Key 名称" />
+          <button onclick="createKey()">创建</button>
+        </div>
+        <details>
+          <summary>Scope 配置（可选）</summary>
+          <div class="scope-config">
+            <label>允许模型（逗号分隔）：<input type="text" id="scopeModels" placeholder="gpt-4,gpt-3.5-turbo" /></label>
+            <label>允许端点（逗号分隔）：<input type="text" id="scopeEndpoints" placeholder="/v1/chat/completions" /></label>
+            <label>Rate Limit (RPM)：<input type="number" id="scopeRPM" value="0" min="0" /></label>
+            <label>过期时间：<input type="datetime-local" id="scopeExpires" /></label>
+          </div>
+        </details>
+      </div>
+      <div class="panel">
+        <h2>Key 列表</h2>
+        <table>
+          <thead><tr><th>ID</th><th>名称</th><th>前缀</th><th>状态</th><th>过期</th><th>操作</th></tr></thead>
+          <tbody id="keyList"></tbody>
+        </table>
+      </div>
+    </section>
+
+    <!-- 用量查看 -->
+    <section id="tab-usage" class="tab-content">
+      <div class="panel">
+        <h2>查询用量</h2>
+        <div class="form-row">
+          <input type="text" id="usageTenant" placeholder="Tenant ID" />
+          <input type="text" id="usageKey" placeholder="Key ID" />
+          <input type="text" id="usageModel" placeholder="Model" />
+          <input type="datetime-local" id="usageStart" />
+          <input type="datetime-local" id="usageEnd" />
+          <select id="usageGroupBy">
+            <option value="">不分组</option>
+            <option value="model">按模型分组</option>
+          </select>
+          <button onclick="queryUsage()">查询</button>
+        </div>
+      </div>
+      <div class="panel">
+        <h2>查询结果</h2>
+        <div id="usageSummary"></div>
+        <table>
+          <thead><tr><th>模型</th><th>请求数</th><th>Prompt Tokens</th><th>Completion Tokens</th><th>Total Tokens</th></tr></thead>
+          <tbody id="usageResult"></tbody>
+        </table>
+      </div>
+    </section>
+  </div>
+  <script src="/dashboard/app.js"></script>
+</body>
+</html>

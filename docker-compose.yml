@@ -1,0 +1,46 @@
+services:
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-replace-me}
+      MYSQL_DATABASE: ai_gateway
+      MYSQL_USER: gateway
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-replace-me}
+    # MySQL 端口不对外暴露，仅容器网络内可达
+    volumes:
+      - mysql_data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  mock-provider:
+    build:
+      context: .
+      dockerfile: Dockerfile.mock
+    # Mock Provider 不对外暴露，仅容器网络内通过 Gateway 访问
+
+  gateway:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8080:8080"
+    environment:
+      DB_HOST: mysql
+      DB_PORT: "3306"
+      DB_USER: gateway
+      DB_PASS: ${MYSQL_PASSWORD:-replace-me}
+      DB_NAME: ai_gateway
+      ADMIN_TOKEN: ${ADMIN_TOKEN:?ADMIN_TOKEN must be set and not default}
+      MOCK_PROVIDER_URL: http://mock-provider:8080
+      LISTEN_ADDR: ":8080"
+    depends_on:
+      mysql:
+        condition: service_healthy
+      mock-provider:
+        condition: service_started
+
+volumes:
+  mysql_data:
