@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/ai-gateway/internal/model"
+	"github.com/haifeiWu/ai-gateway/internal/model"
 )
 
 // UsageWriterStore 用量写入器存储接口。

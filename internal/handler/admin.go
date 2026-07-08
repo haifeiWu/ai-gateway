@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"errors"
 	"log/slog"
 	"net/http"
+	"strings"
 
-	"github.com/ai-gateway/internal/model"
-	"github.com/ai-gateway/internal/service"
+	"github.com/haifeiWu/ai-gateway/internal/model"
+	"github.com/haifeiWu/ai-gateway/internal/service"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -110,6 +112,12 @@ func (h *AdminHandler) UpdateTenant(c *gin.Context) {
 	tenant, err := h.tenantSvc.Update(c.Param("id"), req)
 	if err != nil {
 		slog.Error("update tenant failed", "error", err, "tenant_id", c.Param("id"))
+		if errors.Is(err, gorm.ErrRecordNotFound) || strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": gin.H{"message": "tenant not found", "type": "not_found"},
+			})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": gin.H{"message": err.Error(), "type": "invalid_request_error"},
 		})
@@ -125,8 +133,14 @@ func (h *AdminHandler) DeleteTenant(c *gin.Context) {
 	tenantID := c.Param("id")
 	if err := h.tenantSvc.Delete(tenantID); err != nil {
 		slog.Error("delete tenant failed", "error", err, "tenant_id", tenantID)
-		c.JSON(http.StatusNotFound, gin.H{
-			"error": gin.H{"message": "tenant not found", "type": "not_found"},
+		if errors.Is(err, gorm.ErrRecordNotFound) || strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": gin.H{"message": "tenant not found", "type": "not_found"},
+			})
+			return
+		}
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": gin.H{"message": "failed to delete tenant", "type": "server_error"},
 		})
 		return
 	}
@@ -205,6 +219,12 @@ func (h *AdminHandler) UpdateKey(c *gin.Context) {
 	key, err := h.keySvc.Update(c.Param("id"), req)
 	if err != nil {
 		slog.Error("update key failed", "error", err, "key_id", c.Param("id"))
+		if errors.Is(err, gorm.ErrRecordNotFound) || strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": gin.H{"message": "key not found", "type": "not_found"},
+			})
+			return
+		}
 		c.JSON(http.StatusBadRequest, gin.H{
 			"error": gin.H{"message": "failed to update key", "type": "invalid_request_error"},
 		})
@@ -220,6 +240,12 @@ func (h *AdminHandler) DeleteKey(c *gin.Context) {
 	keyID := c.Param("id")
 	if err := h.keySvc.Delete(keyID); err != nil {
 		slog.Error("delete key failed", "error", err, "key_id", keyID)
+		if errors.Is(err, gorm.ErrRecordNotFound) || strings.Contains(err.Error(), "not found") {
+			c.JSON(http.StatusNotFound, gin.H{
+				"error": gin.H{"message": "key not found", "type": "not_found"},
+			})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{
 			"error": gin.H{"message": "failed to delete key", "type": "server_error"},
 		})

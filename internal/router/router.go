@@ -1,11 +1,11 @@
 package router
 
 import (
-	"github.com/ai-gateway/internal/config"
-	"github.com/ai-gateway/internal/handler"
-	"github.com/ai-gateway/internal/middleware"
-	"github.com/ai-gateway/internal/repository"
-	"github.com/ai-gateway/internal/service"
+	"github.com/haifeiWu/ai-gateway/internal/config"
+	"github.com/haifeiWu/ai-gateway/internal/handler"
+	"github.com/haifeiWu/ai-gateway/internal/middleware"
+	"github.com/haifeiWu/ai-gateway/internal/repository"
+	"github.com/haifeiWu/ai-gateway/internal/service"
 	"github.com/gin-gonic/gin"
 	"gorm.io/gorm"
 )
@@ -14,9 +14,9 @@ import (
 func Setup(db *gorm.DB, cfg *config.Config, usageWriter *service.UsageWriter) (*gin.Engine, *service.RateLimiter, *service.RateLimiter) {
 	gin.SetMode(gin.ReleaseMode)
 
-	// 初始化各层
-	tenantStore := repository.NewTenantStore(db)
-	keyStore := repository.NewKeyStore(db)
+	// 初始化各层（高频鉴权路径使用带缓存的 store，减少 DB 查询）
+	tenantStore := repository.NewCachedTenantStore(db)
+	keyStore := repository.NewCachedKeyStore(db)
 	usageStore := repository.NewUsageStore(db)
 
 	tenantSvc := service.NewTenantService(tenantStore)
@@ -28,7 +28,7 @@ func Setup(db *gorm.DB, cfg *config.Config, usageWriter *service.UsageWriter) (*
 	usageH := handler.NewUsageHandler(usageStore)
 
 	r := gin.New()
-	r.Use(gin.Logger(), middleware.Recovery(), middleware.SecurityHeaders())
+	r.Use(gin.Logger(), middleware.Recovery(), middleware.RequestID(), middleware.SecurityHeaders())
 
 	// 健康检查
 	r.GET("/health", func(c *gin.Context) {

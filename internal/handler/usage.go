@@ -7,7 +7,7 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/ai-gateway/internal/repository"
+	"github.com/haifeiWu/ai-gateway/internal/repository"
 	"github.com/gin-gonic/gin"
 )
 

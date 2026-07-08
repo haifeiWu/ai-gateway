@@ -14,11 +14,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ai-gateway/internal/config"
-	"github.com/ai-gateway/internal/model"
-	"github.com/ai-gateway/internal/repository"
-	"github.com/ai-gateway/internal/router"
-	"github.com/ai-gateway/internal/service"
+	"github.com/haifeiWu/ai-gateway/internal/config"
+	"github.com/haifeiWu/ai-gateway/internal/model"
+	"github.com/haifeiWu/ai-gateway/internal/repository"
+	"github.com/haifeiWu/ai-gateway/internal/router"
+	"github.com/haifeiWu/ai-gateway/internal/service"
 	"github.com/gin-gonic/gin"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
@@ -28,11 +28,12 @@ import (
 const testAdminToken = "test-admin-token"
 
 var (
-	db          *gorm.DB
-	gatewayURL  string
-	gatewaySrv  *httptest.Server
-	mockSrv     *httptest.Server
-	usageWriter *service.UsageWriter
+	db           *gorm.DB
+	gatewayURL   string
+	gatewaySrv   *httptest.Server
+	mockSrv      *httptest.Server
+	usageWriter  *service.UsageWriter
+	adminLimiter *service.RateLimiter
 )
 
 func TestMain(m *testing.M) {
@@ -58,15 +59,16 @@ func run(m *testing.M) int {
 		AdminToken:      testAdminToken,
 		MockProviderURL: mockSrv.URL,
 	}
-	r, proxyLimiter, adminLimiter := router.Setup(db, cfg, usageWriter)
+	r, proxyLimiter, adminLim := router.Setup(db, cfg, usageWriter)
 	gatewaySrv = httptest.NewServer(r)
 	gatewayURL = gatewaySrv.URL
+	adminLimiter = adminLim
 
 	code := m.Run()
 
 	usageWriter.Shutdown()
 	proxyLimiter.Close()
-	adminLimiter.Close()
+	adminLim.Close()
 	gatewaySrv.Close()
 	mockSrv.Close()
 	cleanDB()
@@ -172,6 +174,9 @@ func cleanDB() {
 	db.Exec("DELETE FROM usage_records")
 	db.Exec("DELETE FROM api_keys")
 	db.Exec("DELETE FROM tenants")
+	if adminLimiter != nil {
+		adminLimiter.Reset()
+	}
 }
 
 func setupGatewayWithMockURL(mockURL string) (*httptest.Server, *service.UsageWriter) {
@@ -182,9 +187,10 @@ func setupGatewayWithMockURL(mockURL string) (*httptest.Server, *service.UsageWr
 }
 
 type apiResp struct {
-	Status int
-	Body   interface{}
-	Header http.Header
+	Status  int
+	Body    interface{}
+	Header  http.Header
+	RawBody string
 }
 
 func (r apiResp) mapBody() map[string]interface{} {
@@ -198,6 +204,9 @@ func (r apiResp) arrBody() []interface{} {
 }
 
 func adminReq(method, path string, body interface{}) apiResp {
+	if adminLimiter != nil {
+		adminLimiter.Reset()
+	}
 	return doReq(gatewayURL, testAdminToken, method, path, body)
 }
 
@@ -230,7 +239,7 @@ func doReq(base, auth, method, path string, body interface{}) apiResp {
 	data, _ := io.ReadAll(resp.Body)
 	var v interface{}
 	json.Unmarshal(data, &v)
-	return apiResp{Status: resp.StatusCode, Body: v, Header: resp.Header}
+	return apiResp{Status: resp.StatusCode, Body: v, Header: resp.Header, RawBody: string(data)}
 }
 
 func doReqRaw(base, auth, method, path, rawBody string) apiResp {
@@ -247,12 +256,13 @@ func doReqRaw(base, auth, method, path, rawBody string) apiResp {
 	data, _ := io.ReadAll(resp.Body)
 	var v interface{}
 	json.Unmarshal(data, &v)
-	return apiResp{Status: resp.StatusCode, Body: v, Header: resp.Header}
+	return apiResp{Status: resp.StatusCode, Body: v, Header: resp.Header, RawBody: string(data)}
 }
 
 func createTenant(name string) string {
 	r := adminReq("POST", "/admin/v1/tenants", map[string]string{"name": name})
-	return r.mapBody()["id"].(string)
+	id, _ := r.mapBody()["id"].(string)
+	return id
 }
 
 func createKey(tenantID, name string, scopes model.Scopes) (id, key string) {
@@ -273,9 +283,11 @@ func getKeyID(tenantID, keyName string) string {
 }
 
 func waitForUsage() {
-	// 轮询 usage API 直到有数据或超时（最多 10 秒）
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
+		if adminLimiter != nil {
+			adminLimiter.Reset()
+		}
 		resp := adminReq("GET", "/admin/v1/usage", nil)
 		if resp.Status == 200 {
 			summary, _ := resp.mapBody()["summary"].(map[string]interface{})
@@ -285,6 +297,85 @@ func waitForUsage() {
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
+}
+
+func waitForUsageCount(tid string, n int) {
+	deadline := time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		if adminLimiter != nil {
+			adminLimiter.Reset()
+		}
+		resp := adminReq("GET", fmt.Sprintf("/admin/v1/usage?tenant_id=%s", tid), nil)
+		if resp.Status == 200 {
+			summary, _ := resp.mapBody()["summary"].(map[string]interface{})
+			if total, _ := summary["total_requests"].(float64); int(total) >= n {
+				return
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// safeMap 对 Body 做安全类型断言，避免 nil panic。
+func safeMap(r apiResp) map[string]interface{} {
+	m, _ := r.Body.(map[string]interface{})
+	return m
+}
+
+// getFloat 从 map 安全获取 float64 值。
+func getFloat(t *testing.T, m map[string]interface{}, key string) float64 {
+	t.Helper()
+	v, ok := m[key]
+	if !ok {
+		t.Fatalf("%q: key %q not found in %v", t.Name(), key, m)
+	}
+	f, ok := v.(float64)
+	if !ok {
+		t.Fatalf("%q: %q = %T, want float64", t.Name(), key, v)
+	}
+	return f
+}
+
+// getString 从 map 安全获取 string 值。
+func getString(t *testing.T, m map[string]interface{}, key string) string {
+	t.Helper()
+	v, ok := m[key]
+	if !ok {
+		t.Fatalf("%q: key %q not found in %v", t.Name(), key, m)
+	}
+	s, ok := v.(string)
+	if !ok {
+		t.Fatalf("%q: %q = %T, want string", t.Name(), key, v)
+	}
+	return s
+}
+
+// getMap 从 map 安全获取嵌套 map。
+func getMap(t *testing.T, m map[string]interface{}, key string) map[string]interface{} {
+	t.Helper()
+	v, ok := m[key]
+	if !ok {
+		t.Fatalf("%q: key %q not found in %v", t.Name(), key, m)
+	}
+	sub, ok := v.(map[string]interface{})
+	if !ok {
+		t.Fatalf("%q: %q = %T, want map[string]interface{}", t.Name(), key, v)
+	}
+	return sub
+}
+
+// getArray 从 map 安全获取数组。
+func getArray(t *testing.T, m map[string]interface{}, key string) []interface{} {
+	t.Helper()
+	v, ok := m[key]
+	if !ok {
+		t.Fatalf("%q: key %q not found in %v", t.Name(), key, m)
+	}
+	arr, ok := v.([]interface{})
+	if !ok {
+		t.Fatalf("%q: %q = %T, want []interface{}", t.Name(), key, v)
+	}
+	return arr
 }
 
 func assertStatus(t *testing.T, label string, got, want int) {

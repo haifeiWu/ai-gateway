@@ -91,7 +91,7 @@ function loadTenantsForKeys() {
 
 function loadTenantKeys(tid) {
   if (!tid) tid = document.getElementById('keyTenant').value;
-  if (!tid) return;
+  if (!tid) return alert('请先选择租户');
   api('/admin/v1/tenants/' + tid + '/keys', 'GET').then(data => {
     const tbody = document.getElementById('keyList');
     tbody.innerHTML = (data || []).map(k => `

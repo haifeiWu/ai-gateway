@@ -36,37 +36,85 @@ func TestLoad_validToken(t *testing.T) {
 	}
 }
 
-func TestLoad_defaultToken_rejected(t *testing.T) {
-	t.Setenv("ADMIN_TOKEN", "admin-secret-token")
-
-	_, err := Load()
-	if err == nil {
-		t.Error("默认 ADMIN_TOKEN 应被拒绝")
+func TestLoad_tokenValidation(t *testing.T) {
+	tests := []struct {
+		name    string
+		token   string
+		wantErr bool
+	}{
+		{
+			name:    "默认token被拒绝",
+			token:   "admin-secret-token",
+			wantErr: true,
+		},
+		{
+			name:    "空token被拒绝",
+			token:   "",
+			wantErr: true,
+		},
 	}
-}
 
-func TestLoad_emptyToken_rejected(t *testing.T) {
-	// t.Setenv 不设置 ADMIN_TOKEN，环境变量为空
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.token != "" {
+				t.Setenv("ADMIN_TOKEN", tt.token)
+			}
+			// 不设置 ADMIN_TOKEN 时环境变量为空字符串
 
-	_, err := Load()
-	if err == nil {
-		t.Error("空 ADMIN_TOKEN 应被拒绝")
+			_, err := Load()
+			if tt.wantErr && err == nil {
+				t.Error("期望返回错误但未返回")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("不期望错误: %v", err)
+			}
+		})
 	}
 }
 
 func TestLoad_fromEnv(t *testing.T) {
-	t.Setenv("ADMIN_TOKEN", "test-token")
-	t.Setenv("DB_HOST", "test-db")
-
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() 失败: %v", err)
+	tests := []struct {
+		name   string
+		envKey string
+		envVal string
+		want   string
+	}{
+		{
+			name:   "DB_HOST覆盖",
+			envKey: "DB_HOST",
+			envVal: "test-db",
+			want:   "test-db",
+		},
+		{
+			name:   "ADMIN_TOKEN覆盖",
+			envKey: "ADMIN_TOKEN",
+			envVal: "test-token",
+			want:   "test-token",
+		},
 	}
 
-	if cfg.DBHost != "test-db" {
-		t.Errorf("DB_HOST: expected 'test-db', got %q", cfg.DBHost)
-	}
-	if cfg.AdminToken != "test-token" {
-		t.Errorf("ADMIN_TOKEN: expected 'test-token', got %q", cfg.AdminToken)
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			// 为所有用例设置必要的环境变量
+			t.Setenv("ADMIN_TOKEN", "my-secure-token")
+			t.Setenv(tt.envKey, tt.envVal)
+
+			cfg, err := Load()
+			if err != nil {
+				t.Fatalf("Load() 失败: %v", err)
+			}
+
+			var got string
+			switch tt.envKey {
+			case "DB_HOST":
+				got = cfg.DBHost
+			case "ADMIN_TOKEN":
+				got = cfg.AdminToken
+			}
+
+			if got != tt.want {
+				t.Errorf("%s: got %q, want %q", tt.envKey, got, tt.want)
+			}
+		})
 	}
 }

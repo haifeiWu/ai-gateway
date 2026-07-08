@@ -3,7 +3,7 @@ package service
 import (
 	"fmt"
 
-	"github.com/ai-gateway/internal/model"
+	"github.com/haifeiWu/ai-gateway/internal/model"
 	"github.com/google/uuid"
 )
 

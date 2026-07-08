@@ -3,7 +3,7 @@ package middleware
 import (
 	"net/http"
 
-	"github.com/ai-gateway/internal/service"
+	"github.com/haifeiWu/ai-gateway/internal/service"
 	"github.com/gin-gonic/gin"
 )
 

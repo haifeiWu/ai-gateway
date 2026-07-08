@@ -5,6 +5,9 @@
 
 set -euo pipefail
 
+# 绕过本地代理，避免 curl 请求被转发到代理服务器
+unset http_proxy https_proxy HTTP_PROXY HTTPS_PROXY no_proxy NO_PROXY
+
 BASE="${1:-http://localhost:8080}"
 ADMIN="${2:-$(grep ADMIN_TOKEN .env 2>/dev/null | cut -d= -f2)}"
 AUTH=(-H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json")

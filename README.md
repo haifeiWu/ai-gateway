@@ -72,6 +72,63 @@
 
 ---
 
+## 项目结构
+
+```
+ai-gateway/
+├── cmd/
+│   ├── gateway/          # Gateway 入口
+│   └── mock-provider/    # Mock Provider 入口（模拟 OpenAI 接口）
+├── internal/
+│   ├── config/           # 配置加载（环境变量）
+│   ├── handler/          # HTTP 处理器
+│   │   ├── admin.go      # 租户/Key 管理
+│   │   ├── proxy.go      # AI 模型代理（Chat/Embed/Models）
+│   │   └── usage.go      # 用量查询/CSV 导出
+│   ├── middleware/        # 中间件
+│   │   ├── admin_auth.go # Admin Token 鉴权
+│   │   ├── apikey_auth.go# API Key 鉴权 + Scope 校验
+│   │   ├── recovery.go   # Panic 恢复
+│   │   └── security.go   # 安全头
+│   ├── model/            # 数据模型（GORM）
+│   │   ├── tenant.go     # 租户
+│   │   ├── apikey.go     # API Key（SHA-256 hash）
+│   │   └── usage.go      # 用量记录
+│   ├── repository/       # 数据访问层（GORM）
+│   │   ├── tenant.go
+│   │   ├── apikey.go
+│   │   └── usage.go
+│   ├── router/           # 路由注册
+│   │   └── router.go
+│   └── service/          # 业务逻辑层
+│       ├── tenant.go     # 租户服务
+│       ├── apikey.go     # API Key 生成/哈希/校验
+│       ├── usage.go      # 用量异步写入/查询
+│       └── ratelimit.go  # 内存固定窗口限流
+├── pkg/
+│   └── apierror/         # 统一错误响应（OpenAI 兼容格式）
+├── test/
+│   └── e2e/              # E2E 测试（build tag: e2e）
+├── web/                  # Dashboard（纯 HTML + JS + CSS）
+├── scripts/
+│   └── verify.sh         # 端到端验证脚本（curl + jq）
+├── docs/
+│   └── openapi.yaml      # OpenAPI 3.0 规范
+├── dev_doc/              # 设计/评审/安全文档
+│   ├── DESIGN.md         # 设计文档
+│   ├── CODE_REVIEW.md    # 代码评审报告
+│   ├── E2E_TEST_PLAN.md  # E2E 测试计划
+│   ├── EVALUATION.md     # 项目评估
+│   └── SECURITY_AUDIT.md # 安全审计报告
+├── docker-compose.yml    # Docker Compose 编排
+├── Dockerfile            # Gateway 镜像
+├── Dockerfile.mock       # Mock Provider 镜像
+├── Makefile              # 开发命令
+└── .env.example          # 环境变量模板
+```
+
+---
+
 ## 运行步骤
 
 ### 方式一：Docker Compose（推荐）
@@ -364,7 +421,29 @@ curl -s "$BASE/admin/v1/tenants/nonexistent-id" -H "$ADMIN" | jq .
 
 ---
 
-## E2E 测试
+## 测试与验证
+
+### 单元测试
+
+```bash
+# 运行所有单元测试
+make test
+
+# 或直接使用 go test
+go test ./...
+```
+
+单元测试覆盖：
+- **API Key 生成与哈希**：`internal/model/apikey_test.go`
+- **API Key 服务层**：`internal/service/apikey_test.go`
+- **Rate Limiter 计数器**：`internal/service/ratelimit_test.go`
+- **Tenant 服务层**：`internal/service/tenant_test.go`
+- **Usage 服务层**：`internal/service/usage_test.go`
+- **Config 配置加载**：`internal/config/config_test.go`
+
+### E2E 测试
+
+E2E 测试通过 build tag `e2e` 隔离，需要 MySQL 才能运行：
 
 ```bash
 # 确保 MySQL 运行
@@ -374,7 +453,78 @@ docker compose up -d mysql
 make test-e2e
 ```
 
-测试覆盖：Health / AdminAuth / Tenant CRUD / Key CRUD / ProxyAuth / Chat / SSE Stream / Embed / Models / Scope 校验 / RateLimit / Usage 查询 / 502 错误 / 完整 E2E 流程。
+E2E 测试 (`test/e2e/`) 覆盖场景：
+
+| 测试文件 | 覆盖场景 |
+|---------|---------|
+| `TestHealth` | 健康检查端点 |
+| `TestAdminAuth` | Admin Token 鉴权（缺失、错误、正确） |
+| `TestTenantManagement` | 租户 CRUD（创建/列表/获取/更新/删除/404） |
+| `TestKeyManagement` | API Key CRUD（创建/Scope/禁用/启用/删除/查询） |
+| `TestProxyAuth` | 代理鉴权（无效 Key/禁用 Key/过期 Key/禁用租户） |
+| `TestChatCompletions` | Chat 代理（成功/无效请求/X-Request-ID） |
+| `TestChatCompletionsStreaming` | SSE 流式代理（SSE 格式/[DONE] 标记/非流式不受影响） |
+| `TestEmbeddings` | Embeddings 代理（成功/无效请求） |
+| `TestModels` | 模型列表（成功/未鉴权拒绝） |
+| `TestScopeEnforcement` | Scope 校验（允许/拒绝 model 和 endpoint/空 Scope 不限制） |
+| `TestRateLimit` | Rate Limit（限额内/超额 429） |
+| `TestUsageTracking` | 用量追踪（记录/按 model 分组/按天/按租户/时间范围/分页/CSV 导出/按 Key 过滤/空结果） |
+| `TestErrorHandling` | 错误处理（上游不可达 502） |
+| `TestEndToEndFlow` | 完整 E2E 流程（创建→使用→查询→禁用→删除） |
+
+### 端到端验证脚本
+
+`scripts/verify.sh` 提供一键端到端验证，无需 Go 环境，只需 `curl` 和 `jq`：
+
+```bash
+# 使用默认配置（.env 中的 ADMIN_TOKEN，localhost:8080）
+./scripts/verify.sh
+
+# 或指定 base URL 和 admin token
+./scripts/verify.sh http://localhost:8080 your-admin-token
+```
+
+验证脚本执行 8 项检查：
+
+| 步骤 | 检查项 | 说明 |
+|------|--------|------|
+| 1 | 健康检查 | `/health` 返回 `{"status":"ok"}` |
+| 2 | 创建租户 | 创建 e2e-verify-tenant |
+| 3 | 创建 API Key | 验证 Key 前缀 `sk-agw-` 和长度 39 |
+| 4 | Chat Completions | 代理 `/v1/chat/completions`，验证返回 `chat.completion` |
+| 5 | Embeddings | 代理 `/v1/embeddings`，验证返回 `list` |
+| 6 | Models | 代理 `/v1/models`，验证返回 `list` |
+| 7 | 鉴权拒绝 | 无效 Key → 401 / 过期 Key → 401 / 越权模型 → 403 |
+| 8 | 清理 | 删除测试租户 |
+
+### 完整验证流程
+
+开发和提交前的完整验证顺序：
+
+```bash
+# 1. 构建检查
+make build
+
+# 2. 单元测试
+make test
+
+# 3. 代码检查
+make lint
+
+# 4. 启动服务
+docker compose up -d
+
+# 5. E2E 测试（需 MySQL）
+make test-e2e
+
+# 6. 端到端验证脚本
+./scripts/verify.sh
+
+# 7. 停止服务
+docker compose down
+```
+
+> **提示**：`make build && make test && make lint` 三步应全部通过再提交代码。
 
 ---
 

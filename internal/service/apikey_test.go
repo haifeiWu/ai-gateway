@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/ai-gateway/internal/model"
+	"github.com/haifeiWu/ai-gateway/internal/model"
 	"gorm.io/gorm"
 )
 
@@ -77,216 +77,350 @@ func (m *mockKeyStore) Delete(id string) error {
 	return nil
 }
 
-func TestAPIKeyService_Create_成功(t *testing.T) {
-	tenantStore := &mockTenantStore{tenants: map[string]*model.Tenant{
-		"t1": {ID: "t1", Name: "Test", Status: model.TenantStatusActive},
-	}}
-	keyStore := &mockKeyStore{keys: make(map[string]*model.APIKey)}
-	svc := NewAPIKeyService(keyStore, tenantStore)
-
+func TestAPIKeyService_Create(t *testing.T) {
 	expires := time.Now().Add(30 * 24 * time.Hour)
-	result, err := svc.Create("t1", CreateKeyRequest{
-		Name: "test-key",
-		Scopes: model.Scopes{
-			AllowedModels:    []string{"gpt-4"},
-			AllowedEndpoints: []string{"/v1/chat/completions"},
-			RateLimitRPM:     100,
+
+	tests := []struct {
+		name    string
+		tenants map[string]*model.Tenant
+		req     CreateKeyRequest
+		wantErr bool
+		check   func(t *testing.T, resp *CreateKeyResult, ks *mockKeyStore)
+	}{
+		{
+			name: "成功创建_完整参数",
+			tenants: map[string]*model.Tenant{
+				"t1": {ID: "t1", Name: "Test", Status: model.TenantStatusActive},
+			},
+			req: CreateKeyRequest{
+				Name: "test-key",
+				Scopes: model.Scopes{
+					AllowedModels:    []string{"gpt-4"},
+					AllowedEndpoints: []string{"/v1/chat/completions"},
+					RateLimitRPM:     100,
+				},
+				ExpiresAt: &expires,
+			},
+			wantErr: false,
+			check: func(t *testing.T, resp *CreateKeyResult, ks *mockKeyStore) {
+				if resp.Key == "" {
+					t.Error("明文 Key 不应为空")
+				}
+				if len(resp.Key) != 39 { // "sk-agw-"(7) + 32 hex chars
+					t.Errorf("Key 长度 = %d, want 39", len(resp.Key))
+				}
+				if resp.Key[:7] != "sk-agw-" {
+					t.Errorf("Key 前缀错误: %q", resp.Key[:7])
+				}
+				if resp.KeyPrefix == "" {
+					t.Error("KeyPrefix 不应为空")
+				}
+				if resp.Name != "test-key" {
+					t.Errorf("名称 = %q, want %q", resp.Name, "test-key")
+				}
+
+				stored, err := ks.GetByHash(HashKey(resp.Key))
+				if err != nil {
+					t.Fatalf("通过 hash 查询失败: %v", err)
+				}
+				if stored.Name != "test-key" {
+					t.Errorf("存储的名称 = %q, want test-key", stored.Name)
+				}
+			},
 		},
-		ExpiresAt: &expires,
-	})
+		{
+			name: "租户不存在_返回错误",
+			tenants: map[string]*model.Tenant{},
+			req: CreateKeyRequest{
+				Name: "test",
+			},
+			wantErr: true,
+		},
+		{
+			name: "无限期Key_过期时间为nil",
+			tenants: map[string]*model.Tenant{
+				"t1": {ID: "t1", Name: "Test", Status: model.TenantStatusActive},
+			},
+			req: CreateKeyRequest{
+				Name:      "forever-key",
+				ExpiresAt: nil,
+			},
+			wantErr: false,
+			check: func(t *testing.T, resp *CreateKeyResult, ks *mockKeyStore) {
+				if resp.ExpiresAt != nil {
+					t.Error("未设过期时间时应为 nil")
+				}
+			},
+		},
+	}
 
-	if err != nil {
-		t.Fatalf("创建失败: %v", err)
-	}
-	if result.Key == "" {
-		t.Error("明文 Key 不应为空")
-	}
-	if len(result.Key) != 39 { // "sk-agw-"(7) + 32 hex chars
-		t.Errorf("Key 长度 = %d, want 39", len(result.Key))
-	}
-	if result.Key[:7] != "sk-agw-" {
-		t.Errorf("Key 前缀错误: %q", result.Key[:7])
-	}
-	if result.KeyPrefix == "" {
-		t.Error("KeyPrefix 不应为空")
-	}
-	if result.Name != "test-key" {
-		t.Errorf("名称 = %q, want %q", result.Name, "test-key")
-	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyStore := &mockKeyStore{keys: make(map[string]*model.APIKey)}
+			tenantStore := &mockTenantStore{tenants: tt.tenants}
+			svc := NewAPIKeyService(keyStore, tenantStore)
 
-	// 验证 Key 已存储（hash 方式）
-	stored, err := keyStore.GetByHash(HashKey(result.Key))
-	if err != nil {
-		t.Fatalf("通过 hash 查询失败: %v", err)
-	}
-	if stored.Name != "test-key" {
-		t.Errorf("存储的名称 = %q", stored.Name)
-	}
-}
-
-func TestAPIKeyService_Create_租户不存在(t *testing.T) {
-	tenantStore := &mockTenantStore{tenants: make(map[string]*model.Tenant)}
-	keyStore := &mockKeyStore{keys: make(map[string]*model.APIKey)}
-	svc := NewAPIKeyService(keyStore, tenantStore)
-
-	_, err := svc.Create("nonexistent", CreateKeyRequest{Name: "test"})
-	if err == nil {
-		t.Error("租户不存在时应返回错误")
-	}
-}
-
-func TestAPIKeyService_Create_无限期Key(t *testing.T) {
-	tenantStore := &mockTenantStore{tenants: map[string]*model.Tenant{
-		"t1": {ID: "t1", Name: "Test", Status: model.TenantStatusActive},
-	}}
-	keyStore := &mockKeyStore{keys: make(map[string]*model.APIKey)}
-	svc := NewAPIKeyService(keyStore, tenantStore)
-
-	result, err := svc.Create("t1", CreateKeyRequest{
-		Name:      "forever-key",
-		ExpiresAt: nil,
-	})
-	if err != nil {
-		t.Fatalf("创建失败: %v", err)
-	}
-	if result.ExpiresAt != nil {
-		t.Error("未设过期时间时应为 nil")
+			resp, err := svc.Create("t1", tt.req)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("期望返回错误但未返回")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("不期望错误: %v", err)
+			}
+			if tt.check != nil {
+				tt.check(t, resp, keyStore)
+			}
+		})
 	}
 }
 
-func TestAPIKeyService_Update_各字段(t *testing.T) {
-	keyStore := &mockKeyStore{keys: make(map[string]*model.APIKey)}
-	tenantStore := &mockTenantStore{tenants: map[string]*model.Tenant{
-		"t1": {ID: "t1", Name: "Test", Status: model.TenantStatusActive},
-	}}
-	svc := NewAPIKeyService(keyStore, tenantStore)
+func TestAPIKeyService_Update(t *testing.T) {
+	statusDisabled := model.KeyStatusDisabled
+	nameRenamed := "renamed"
+	scopesUpdated := model.Scopes{
+		AllowedModels: []string{"gpt-3.5-turbo"},
+		RateLimitRPM:  50,
+	}
+	expiresFuture := time.Now().Add(365 * 24 * time.Hour)
 
-	result, _ := svc.Create("t1", CreateKeyRequest{Name: "original"})
+	tests := []struct {
+		name    string
+		update  UpdateRequest
+		wantErr bool
+		check   func(t *testing.T, updated *model.APIKey)
+	}{
+		{
+			name: "更新状态_成功",
+			update: UpdateRequest{
+				Status: &statusDisabled,
+			},
+			check: func(t *testing.T, k *model.APIKey) {
+				if k.Status != model.KeyStatusDisabled {
+					t.Errorf("状态 = %q, want %q", k.Status, model.KeyStatusDisabled)
+				}
+			},
+		},
+		{
+			name: "更新名称_成功",
+			update: UpdateRequest{
+				Name: &nameRenamed,
+			},
+			check: func(t *testing.T, k *model.APIKey) {
+				if k.Name != "renamed" {
+					t.Errorf("名称 = %q, want %q", k.Name, "renamed")
+				}
+			},
+		},
+		{
+			name: "更新Scopes_成功",
+			update: UpdateRequest{
+				Scopes: &scopesUpdated,
+			},
+			check: func(t *testing.T, k *model.APIKey) {
+				if k.Scopes.RateLimitRPM != 50 {
+					t.Errorf("RateLimitRPM = %d, want 50", k.Scopes.RateLimitRPM)
+				}
+			},
+		},
+		{
+			name: "更新过期时间_成功",
+			update: UpdateRequest{
+				ExpiresAt: &expiresFuture,
+			},
+			check: func(t *testing.T, k *model.APIKey) {
+				if k.ExpiresAt == nil {
+					t.Error("过期时间不应为 nil")
+				}
+			},
+		},
+		{
+			name: "更新不存在的Key_返回错误",
+			update: UpdateRequest{
+				Name: &nameRenamed,
+			},
+			wantErr: true,
+		},
+	}
 
-	t.Run("更新状态", func(t *testing.T) {
-		status := model.KeyStatusDisabled
-		updated, err := svc.Update(result.ID, UpdateRequest{Status: &status})
-		if err != nil {
-			t.Fatalf("更新失败: %v", err)
-		}
-		if updated.Status != model.KeyStatusDisabled {
-			t.Errorf("状态 = %q, want %q", updated.Status, model.KeyStatusDisabled)
-		}
-	})
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyStore := &mockKeyStore{keys: make(map[string]*model.APIKey)}
+			tenantStore := &mockTenantStore{tenants: map[string]*model.Tenant{
+				"t1": {ID: "t1", Name: "Test", Status: model.TenantStatusActive},
+			}}
+			svc := NewAPIKeyService(keyStore, tenantStore)
 
-	t.Run("更新名称", func(t *testing.T) {
-		name := "renamed"
-		updated, err := svc.Update(result.ID, UpdateRequest{Name: &name})
-		if err != nil {
-			t.Fatalf("更新失败: %v", err)
-		}
-		if updated.Name != "renamed" {
-			t.Errorf("名称 = %q, want %q", updated.Name, "renamed")
-		}
-	})
+			result, err := svc.Create("t1", CreateKeyRequest{Name: "original"})
+			if err != nil {
+				t.Fatalf("创建 Key 失败: %v", err)
+			}
 
-	t.Run("更新 Scopes", func(t *testing.T) {
-		scopes := model.Scopes{
-			AllowedModels: []string{"gpt-3.5-turbo"},
-			RateLimitRPM:  50,
-		}
-		updated, err := svc.Update(result.ID, UpdateRequest{Scopes: &scopes})
-		if err != nil {
-			t.Fatalf("更新失败: %v", err)
-		}
-		if updated.Scopes.RateLimitRPM != 50 {
-			t.Errorf("RateLimitRPM = %d, want 50", updated.Scopes.RateLimitRPM)
-		}
-	})
+			var targetID string
+			if tt.wantErr {
+				targetID = "nonexistent"
+			} else {
+				targetID = result.ID
+			}
 
-	t.Run("更新过期时间", func(t *testing.T) {
-		newExp := time.Now().Add(365 * 24 * time.Hour)
-		updated, err := svc.Update(result.ID, UpdateRequest{ExpiresAt: &newExp})
-		if err != nil {
-			t.Fatalf("更新失败: %v", err)
-		}
-		if updated.ExpiresAt == nil {
-			t.Error("过期时间不应为 nil")
-		}
-	})
-}
-
-func TestAPIKeyService_Update_不存在(t *testing.T) {
-	keyStore := &mockKeyStore{keys: make(map[string]*model.APIKey)}
-	tenantStore := &mockTenantStore{tenants: make(map[string]*model.Tenant)}
-	svc := NewAPIKeyService(keyStore, tenantStore)
-
-	_, err := svc.Update("nonexistent", UpdateRequest{})
-	if err == nil {
-		t.Error("更新不存在的 Key 应返回错误")
+			updated, err := svc.Update(targetID, tt.update)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("期望返回错误但未返回")
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("更新失败: %v", err)
+			}
+			if tt.check != nil {
+				tt.check(t, updated)
+			}
+		})
 	}
 }
 
-func TestAPIKeyService_Delete_成功(t *testing.T) {
-	keyStore := &mockKeyStore{keys: make(map[string]*model.APIKey)}
-	tenantStore := &mockTenantStore{tenants: map[string]*model.Tenant{
-		"t1": {ID: "t1", Name: "Test", Status: model.TenantStatusActive},
-	}}
-	svc := NewAPIKeyService(keyStore, tenantStore)
-
-	result, _ := svc.Create("t1", CreateKeyRequest{Name: "to-delete"})
-
-	err := svc.Delete(result.ID)
-	if err != nil {
-		t.Fatalf("删除失败: %v", err)
+func TestAPIKeyService_Delete(t *testing.T) {
+	tests := []struct {
+		name   string
+		verify func(t *testing.T, svc *APIKeyService, keyID string)
+	}{
+		{
+			name: "删除成功",
+			verify: func(t *testing.T, svc *APIKeyService, keyID string) {
+				err := svc.Delete(keyID)
+				if err != nil {
+					t.Fatalf("删除失败: %v", err)
+				}
+				// 验证已删除
+				_, err = svc.GetByID(keyID)
+				if err != gorm.ErrRecordNotFound {
+					t.Errorf("删除后应查询不到: %v", err)
+				}
+			},
+		},
 	}
 
-	// 验证已删除
-	_, err = svc.GetByID(result.ID)
-	if err != gorm.ErrRecordNotFound {
-		t.Errorf("删除后应查询不到: %v", err)
-	}
-}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyStore := &mockKeyStore{keys: make(map[string]*model.APIKey)}
+			tenantStore := &mockTenantStore{tenants: map[string]*model.Tenant{
+				"t1": {ID: "t1", Name: "Test", Status: model.TenantStatusActive},
+			}}
+			svc := NewAPIKeyService(keyStore, tenantStore)
 
-func TestAPIKeyService_ListByTenant_按租户筛选(t *testing.T) {
-	keyStore := &mockKeyStore{keys: make(map[string]*model.APIKey)}
-	tenantStore := &mockTenantStore{tenants: map[string]*model.Tenant{
-		"t1": {ID: "t1", Name: "A", Status: model.TenantStatusActive},
-		"t2": {ID: "t2", Name: "B", Status: model.TenantStatusActive},
-	}}
-	svc := NewAPIKeyService(keyStore, tenantStore)
+			result, err := svc.Create("t1", CreateKeyRequest{Name: "to-delete"})
+			if err != nil {
+				t.Fatalf("创建 Key 失败: %v", err)
+			}
 
-	svc.Create("t1", CreateKeyRequest{Name: "key-1"})
-	svc.Create("t1", CreateKeyRequest{Name: "key-2"})
-	svc.Create("t2", CreateKeyRequest{Name: "key-3"})
-
-	keys, err := svc.ListByTenant("t1")
-	if err != nil {
-		t.Fatalf("列表失败: %v", err)
-	}
-	if len(keys) != 2 {
-		t.Errorf("t1 的 Key 数 = %d, want 2", len(keys))
-	}
-
-	keys, _ = svc.ListByTenant("t2")
-	if len(keys) != 1 {
-		t.Errorf("t2 的 Key 数 = %d, want 1", len(keys))
+			tt.verify(t, svc, result.ID)
+		})
 	}
 }
 
-func TestHashKey_确定性(t *testing.T) {
-	key := "sk-agw-test-key-12345678"
-
-	h1 := HashKey(key)
-	h2 := HashKey(key)
-
-	if h1 != h2 {
-		t.Error("相同输入应产生相同的 hash")
+func TestAPIKeyService_ListByTenant(t *testing.T) {
+	tests := []struct {
+		name       string
+		createKeys []struct {
+			tenantID string
+			name     string
+		}
+		queryTenant string
+		wantCount   int
+	}{
+		{
+			name: "按租户筛选_返回对应Key",
+			createKeys: []struct {
+				tenantID string
+				name     string
+			}{
+				{"t1", "key-1"},
+				{"t1", "key-2"},
+				{"t2", "key-3"},
+			},
+			queryTenant: "t1",
+			wantCount:   2,
+		},
+		{
+			name: "无Key的租户_返回空列表",
+			createKeys: []struct {
+				tenantID string
+				name     string
+			}{
+				{"t1", "key-1"},
+			},
+			queryTenant: "t2",
+			wantCount:   0,
+		},
 	}
-	if len(h1) != 64 {
-		t.Errorf("SHA-256 hash 长度 = %d, want 64", len(h1))
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			keyStore := &mockKeyStore{keys: make(map[string]*model.APIKey)}
+			tenantStore := &mockTenantStore{tenants: map[string]*model.Tenant{
+				"t1": {ID: "t1", Name: "A", Status: model.TenantStatusActive},
+				"t2": {ID: "t2", Name: "B", Status: model.TenantStatusActive},
+			}}
+			svc := NewAPIKeyService(keyStore, tenantStore)
+
+			for _, k := range tt.createKeys {
+				if _, err := svc.Create(k.tenantID, CreateKeyRequest{Name: k.name}); err != nil {
+					t.Fatalf("创建 Key 失败: %v", err)
+				}
+			}
+
+			keys, err := svc.ListByTenant(tt.queryTenant)
+			if err != nil {
+				t.Fatalf("列表失败: %v", err)
+			}
+			if len(keys) != tt.wantCount {
+				t.Errorf("%s 的 Key 数 = %d, want %d", tt.queryTenant, len(keys), tt.wantCount)
+			}
+		})
 	}
 }
 
-func TestHashKey_不同输入(t *testing.T) {
-	h1 := HashKey("key-a")
-	h2 := HashKey("key-b")
-	if h1 == h2 {
-		t.Error("不同输入应产生不同的 hash")
+func TestHashKey(t *testing.T) {
+	tests := []struct {
+		name      string
+		input1    string
+		input2    string
+		wantEqual bool
+		wantLen   int
+	}{
+		{
+			name:      "相同输入产生相同hash",
+			input1:    "sk-agw-test-key-12345678",
+			input2:    "sk-agw-test-key-12345678",
+			wantEqual: true,
+			wantLen:   64,
+		},
+		{
+			name:      "不同输入产生不同hash",
+			input1:    "key-a",
+			input2:    "key-b",
+			wantEqual: false,
+			wantLen:   64,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h1 := HashKey(tt.input1)
+			h2 := HashKey(tt.input2)
+
+			if tt.wantEqual && h1 != h2 {
+				t.Error("相同输入应产生相同的 hash")
+			}
+			if !tt.wantEqual && h1 == h2 {
+				t.Error("不同输入应产生不同的 hash")
+			}
+			if len(h1) != tt.wantLen {
+				t.Errorf("hash 长度 = %d, want %d", len(h1), tt.wantLen)
+			}
+		})
 	}
 }

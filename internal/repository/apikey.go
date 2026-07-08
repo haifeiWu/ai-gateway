@@ -1,7 +1,7 @@
 package repository
 
 import (
-	"github.com/ai-gateway/internal/model"
+	"github.com/haifeiWu/ai-gateway/internal/model"
 	"gorm.io/gorm"
 )
 

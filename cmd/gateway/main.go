@@ -10,11 +10,11 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/ai-gateway/internal/config"
-	"github.com/ai-gateway/internal/model"
-	"github.com/ai-gateway/internal/repository"
-	"github.com/ai-gateway/internal/router"
-	"github.com/ai-gateway/internal/service"
+	"github.com/haifeiWu/ai-gateway/internal/config"
+	"github.com/haifeiWu/ai-gateway/internal/model"
+	"github.com/haifeiWu/ai-gateway/internal/repository"
+	"github.com/haifeiWu/ai-gateway/internal/router"
+	"github.com/haifeiWu/ai-gateway/internal/service"
 	"gorm.io/driver/mysql"
 	"gorm.io/gorm"
 	gormlogger "gorm.io/gorm/logger"
@@ -39,11 +39,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	sqlDB, _ := db.DB()
+	sqlDB, err := db.DB()
+	if err != nil {
+		slog.Error("failed to get sql.DB", "error", err)
+		os.Exit(1)
+	}
 	sqlDB.SetMaxOpenConns(25)
 	sqlDB.SetMaxIdleConns(5)
+	sqlDB.SetConnMaxLifetime(5 * time.Minute)
 
-	// 自动迁移
+	// 自动迁移（生产环境建议替换为 golang-migrate，见 migrations/ 目录）
 	if err := db.AutoMigrate(&model.Tenant{}, &model.APIKey{}, &model.UsageRecord{}); err != nil {
 		slog.Error("failed to auto migrate", "error", err)
 		os.Exit(1)

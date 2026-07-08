@@ -7,7 +7,7 @@ import (
 	"fmt"
 	"time"
 
-	"github.com/ai-gateway/internal/model"
+	"github.com/haifeiWu/ai-gateway/internal/model"
 	"github.com/google/uuid"
 )
 
@@ -141,6 +141,9 @@ func (s *APIKeyService) Update(id string, req UpdateRequest) (*model.APIKey, err
 
 // Delete 删除 Key。
 func (s *APIKeyService) Delete(id string) error {
+	if _, err := s.store.GetByID(id); err != nil {
+		return fmt.Errorf("key not found: %w", err)
+	}
 	return s.store.Delete(id)
 }
 

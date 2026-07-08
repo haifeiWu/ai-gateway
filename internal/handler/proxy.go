@@ -12,8 +12,9 @@ import (
 	"strings"
 	"time"
 
-	"github.com/ai-gateway/internal/model"
-	"github.com/ai-gateway/pkg/openai"
+	"github.com/haifeiWu/ai-gateway/internal/middleware"
+	"github.com/haifeiWu/ai-gateway/internal/model"
+	"github.com/haifeiWu/ai-gateway/pkg/openai"
 	"github.com/gin-gonic/gin"
 	"github.com/google/uuid"
 )
@@ -62,13 +63,13 @@ func (h *ProxyHandler) ChatCompletions(c *gin.Context) {
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20)
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		writeError(c, http.StatusBadRequest, "request body too large or unreadable", "invalid_request_error")
+		middleware.WriteError(c, http.StatusBadRequest, "request body too large or unreadable", "invalid_request_error")
 		return
 	}
 
 	var req openai.ChatCompletionRequest
 	if err := json.Unmarshal(body, &req); err != nil {
-		writeError(c, http.StatusBadRequest, "invalid request body", "invalid_request_error")
+		middleware.WriteError(c, http.StatusBadRequest, "invalid request body", "invalid_request_error")
 		return
 	}
 
@@ -130,13 +131,13 @@ func (h *ProxyHandler) proxyModelEndpoint(endpoint string, c *gin.Context,
 	c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, 10<<20) // 10MB 限制
 	body, err := io.ReadAll(c.Request.Body)
 	if err != nil {
-		writeError(c, http.StatusBadRequest, "request body too large or unreadable", "invalid_request_error")
+		middleware.WriteError(c, http.StatusBadRequest, "request body too large or unreadable", "invalid_request_error")
 		return
 	}
 
 	modelName, err := parseModel(body)
 	if err != nil {
-		writeError(c, http.StatusBadRequest, "invalid request body", "invalid_request_error")
+		middleware.WriteError(c, http.StatusBadRequest, "invalid request body", "invalid_request_error")
 		return
 	}
 
@@ -159,15 +160,15 @@ func (h *ProxyHandler) doProxy(endpoint string, body []byte, modelName string,
 	key *model.APIKey, c *gin.Context) ([]byte, int, int64, error) {
 
 	start := time.Now()
-	resp, statusCode, err := h.forward(endpoint, body)
+	resp, statusCode, err := h.forward(c, endpoint, body)
 	latencyMs := time.Since(start).Milliseconds()
 
 	if err != nil {
 		slog.Error("upstream error", "endpoint", endpoint, "error", err)
 		if os.IsTimeout(err) {
-			writeError(c, http.StatusGatewayTimeout, "upstream timeout", "timeout")
+			middleware.WriteError(c, http.StatusGatewayTimeout, "upstream timeout", "timeout")
 		} else {
-			writeError(c, http.StatusBadGateway, "upstream error", "upstream_error")
+			middleware.WriteError(c, http.StatusBadGateway, "upstream error", "upstream_error")
 		}
 		h.recordUsage(key, modelName, 0, 0, 0, statusCode, int(latencyMs), c)
 		return nil, statusCode, latencyMs, err
@@ -181,7 +182,7 @@ func (h *ProxyHandler) proxyStream(body []byte, modelName string, key *model.API
 	url := h.mockURL + "/v1/chat/completions"
 	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
-		writeError(c, http.StatusInternalServerError, "create request failed", "server_error")
+		middleware.WriteError(c, http.StatusInternalServerError, "create request failed", "server_error")
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
@@ -192,9 +193,9 @@ func (h *ProxyHandler) proxyStream(body []byte, modelName string, key *model.API
 	if err != nil {
 		slog.Error("upstream stream error", "error", err)
 		if os.IsTimeout(err) {
-			writeError(c, http.StatusGatewayTimeout, "upstream timeout", "timeout")
+			middleware.WriteError(c, http.StatusGatewayTimeout, "upstream timeout", "timeout")
 		} else {
-			writeError(c, http.StatusBadGateway, "upstream error", "upstream_error")
+			middleware.WriteError(c, http.StatusBadGateway, "upstream error", "upstream_error")
 		}
 		h.recordUsage(key, modelName, 0, 0, 0, 502, int(time.Since(start).Milliseconds()), c)
 		return
@@ -217,7 +218,7 @@ func (h *ProxyHandler) proxyStream(body []byte, modelName string, key *model.API
 
 	flusher, ok := c.Writer.(http.Flusher)
 	if !ok {
-		writeError(c, http.StatusInternalServerError, "streaming not supported", "server_error")
+		middleware.WriteError(c, http.StatusInternalServerError, "streaming not supported", "server_error")
 		return
 	}
 
@@ -289,32 +290,25 @@ func (h *ProxyHandler) Models(c *gin.Context) {
 		return
 	}
 
-	// 设置 X-Request-ID 响应头
-	requestID := c.GetString("request_id")
-	if requestID == "" {
-		requestID = uuid.NewString()
-	}
-	c.Header("X-Request-ID", requestID)
-
-	resp, statusCode, err := h.forward("/v1/models", nil)
+	resp, statusCode, err := h.forward(c, "/v1/models", nil)
 	if err != nil {
 		slog.Error("upstream error", "endpoint", "/v1/models", "error", err)
-		writeError(c, http.StatusBadGateway, "upstream error", "upstream_error")
+		middleware.WriteError(c, http.StatusBadGateway, "upstream error", "upstream_error")
 		return
 	}
 
 	c.Data(statusCode, "application/json", resp)
 }
 
-// forward 转发请求到 Mock Provider。
-func (h *ProxyHandler) forward(path string, body []byte) ([]byte, int, error) {
+// forward 转发请求到 Mock Provider，使用 gin.Context 传递上下文以支持取消传播。
+func (h *ProxyHandler) forward(c *gin.Context, path string, body []byte) ([]byte, int, error) {
 	url := h.mockURL + path
 	method := http.MethodGet
 	if body != nil {
 		method = http.MethodPost
 	}
 
-	req, err := http.NewRequest(method, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(c.Request.Context(), method, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, 0, fmt.Errorf("create request: %w", err)
 	}
@@ -357,7 +351,7 @@ func (h *ProxyHandler) checkEndpoint(key *model.APIKey, endpoint string, c *gin.
 			return true
 		}
 	}
-	writeError(c, http.StatusForbidden, "endpoint not allowed", "forbidden")
+	middleware.WriteError(c, http.StatusForbidden, "endpoint not allowed", "forbidden")
 	return false
 }
 
@@ -374,7 +368,7 @@ func (h *ProxyHandler) checkModel(key *model.APIKey, modelName string, c *gin.Co
 			return true
 		}
 	}
-	writeError(c, http.StatusForbidden, "model not allowed", "forbidden")
+	middleware.WriteError(c, http.StatusForbidden, "model not allowed", "forbidden")
 	return false
 }
 
@@ -384,7 +378,7 @@ func (h *ProxyHandler) checkRateLimit(key *model.APIKey, c *gin.Context) bool {
 		return false
 	}
 	if !h.rateLimiter.Allow(key.ID, key.Scopes.RateLimitRPM) {
-		writeError(c, http.StatusTooManyRequests, "rate limit exceeded", "rate_limit")
+		middleware.WriteError(c, http.StatusTooManyRequests, "rate limit exceeded", "rate_limit")
 		return false
 	}
 	return true
@@ -396,10 +390,6 @@ func (h *ProxyHandler) recordUsage(key *model.APIKey, modelName string,
 	c *gin.Context) {
 
 	requestID := c.GetString("request_id")
-	if requestID == "" {
-		requestID = uuid.NewString()
-	}
-	c.Header("X-Request-ID", requestID)
 
 	h.usageWriter.Record(&model.UsageRecord{
 		ID:               uuid.NewString(),
@@ -416,8 +406,3 @@ func (h *ProxyHandler) recordUsage(key *model.APIKey, modelName string,
 	})
 }
 
-func writeError(c *gin.Context, code int, message, errType string) {
-	c.AbortWithStatusJSON(code, gin.H{
-		"error": gin.H{"message": message, "type": errType},
-	})
-}

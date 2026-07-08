@@ -5,7 +5,7 @@ import (
 	"time"
 )
 
-// RateLimiter 基于 key_id 的内存滑动窗口限流器。
+// RateLimiter 基于 key_id 的内存固定窗口限流器。
 type RateLimiter struct {
 	mu      sync.Mutex
 	windows map[string]*rateWindow
@@ -77,4 +77,11 @@ func (rl *RateLimiter) CleanupExpired() {
 			delete(rl.windows, k)
 		}
 	}
+}
+
+// Reset 清除所有限流窗口。
+func (rl *RateLimiter) Reset() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	rl.windows = make(map[string]*rateWindow)
 }

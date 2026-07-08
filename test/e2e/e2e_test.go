@@ -3,14 +3,13 @@
 package e2e
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
-	"net/http"
 	"strings"
 	"testing"
+	"time"
 
-	"github.com/ai-gateway/internal/model"
+	"github.com/haifeiWu/ai-gateway/internal/model"
 )
 
 func TestHealth(t *testing.T) {
@@ -90,6 +89,35 @@ func TestTenantManagement(t *testing.T) {
 		assertStatus(t, "not found", r.Status, 404)
 		assertErrorType(t, "not found", r.Body, "not_found")
 	})
+
+	t.Run("update_name", func(t *testing.T) {
+		id := createTenant("Original Name")
+		r := adminReq("PATCH", "/admin/v1/tenants/"+id, map[string]string{"name": "Updated Name"})
+		assertStatus(t, "update name", r.Status, 200)
+		if r.mapBody()["name"] != "Updated Name" {
+			t.Errorf("update name: name = %v, want Updated Name", r.mapBody()["name"])
+		}
+	})
+
+	t.Run("update_status", func(t *testing.T) {
+		id := createTenant("Status Tenant")
+		r := adminReq("PATCH", "/admin/v1/tenants/"+id, map[string]string{"status": "disabled"})
+		assertStatus(t, "update status", r.Status, 200)
+		if r.mapBody()["status"] != "disabled" {
+			t.Errorf("update status: status = %v, want disabled", r.mapBody()["status"])
+		}
+	})
+
+	t.Run("delete", func(t *testing.T) {
+		id := createTenant("ToDelete")
+		r := adminReq("DELETE", "/admin/v1/tenants/"+id, nil)
+		assertStatus(t, "delete tenant", r.Status, 200)
+		if r.mapBody()["status"] != "deleted" {
+			t.Errorf("delete tenant: status = %v, want deleted", r.mapBody()["status"])
+		}
+		getR := adminReq("GET", "/admin/v1/tenants/"+id, nil)
+		assertStatus(t, "get after delete", getR.Status, 404)
+	})
 }
 
 func TestKeyManagement(t *testing.T) {
@@ -105,7 +133,7 @@ func TestKeyManagement(t *testing.T) {
 		m := r.mapBody()
 		key, _ := m["key"].(string)
 		if len(key) != 39 || key[:7] != "sk-agw-" {
-			t.Errorf("create: key = %q, want sk-agw- prefix, 40 chars", key)
+			t.Errorf("create: key = %q, want sk-agw- prefix, 39 chars", key)
 		}
 		prefix, _ := m["key_prefix"].(string)
 		if len(prefix) < 4 || prefix[len(prefix)-4:] != "****" {
@@ -179,6 +207,28 @@ func TestKeyManagement(t *testing.T) {
 		getR := adminReq("GET", "/admin/v1/keys/"+keyID, nil)
 		assertStatus(t, "get after delete", getR.Status, 404)
 	})
+
+	t.Run("get_by_id", func(t *testing.T) {
+		keyID, _ := createKey(tid, "Get Key Test", model.Scopes{})
+		r := adminReq("GET", "/admin/v1/keys/"+keyID, nil)
+		assertStatus(t, "get key", r.Status, 200)
+		m := r.mapBody()
+		if m["id"] != keyID {
+			t.Errorf("get key: id = %v, want %s", m["id"], keyID)
+		}
+		if m["name"] != "Get Key Test" {
+			t.Errorf("get key: name = %v, want Get Key Test", m["name"])
+		}
+		if m["status"] != "active" {
+			t.Errorf("get key: status = %v, want active", m["status"])
+		}
+		if m["tenant_id"] != tid {
+			t.Errorf("get key: tenant_id = %v, want %s", m["tenant_id"], tid)
+		}
+		if _, ok := m["key_prefix"].(string); !ok || m["key_prefix"] == "" {
+			t.Error("get key: key_prefix should be non-empty string")
+		}
+	})
 }
 
 func TestProxyAuth(t *testing.T) {
@@ -213,7 +263,7 @@ func TestProxyAuth(t *testing.T) {
 			"scopes":     model.Scopes{},
 			"expires_at": "2020-01-01T00:00:00Z",
 		})
-		apiKey := r.mapBody()["key"].(string)
+		apiKey, _ := r.mapBody()["key"].(string)
 		r2 := proxyReq(apiKey, "POST", "/v1/chat/completions", nil)
 		assertStatus(t, "expired key", r2.Status, 401)
 		assertErrorType(t, "expired key", r2.Body, "auth_error")
@@ -249,17 +299,17 @@ func TestChatCompletions(t *testing.T) {
 		if m["object"] != "chat.completion" {
 			t.Errorf("chat: object = %v, want chat.completion", m["object"])
 		}
-		usage, _ := m["usage"].(map[string]interface{})
+		usage := getMap(t, m, "usage")
 		if usage == nil {
 			t.Fatal("chat: usage is nil")
 		}
-		if int(usage["total_tokens"].(float64)) != 35 {
+		if int(getFloat(t, usage, "total_tokens")) != 35 {
 			t.Errorf("chat: total_tokens = %v, want 35", usage["total_tokens"])
 		}
 	})
 
 	t.Run("invalid_body", func(t *testing.T) {
-		r := doReqRaw(gatewayURL, apiKey, "POST", "/v1/chat/completions", `{"invalid":"json"}`)
+		r := doReqRaw(gatewayURL, apiKey, "POST", "/v1/chat/completions", `{invalid json}`)
 		assertStatus(t, "invalid body", r.Status, 400)
 		assertErrorType(t, "invalid body", r.Body, "invalid_request_error")
 	})
@@ -296,7 +346,7 @@ func TestChatCompletionsStreaming(t *testing.T) {
 			t.Errorf("stream: Content-Type = %q, want text/event-stream", ct)
 		}
 
-		bodyStr, _ := r.Body.(string)
+		bodyStr := r.RawBody
 		if bodyStr == "" {
 			t.Fatal("stream: response body is empty")
 		}
@@ -350,14 +400,14 @@ func TestEmbeddings(t *testing.T) {
 		if m["object"] != "list" {
 			t.Errorf("embed: object = %v, want list", m["object"])
 		}
-		usage, _ := m["usage"].(map[string]interface{})
-		if int(usage["total_tokens"].(float64)) != 8 {
+		usage := getMap(t, m, "usage")
+		if int(getFloat(t, usage, "total_tokens")) != 8 {
 			t.Errorf("embed: total_tokens = %v, want 8", usage["total_tokens"])
 		}
 	})
 
 	t.Run("invalid_body", func(t *testing.T) {
-		r := doReqRaw(gatewayURL, apiKey, "POST", "/v1/embeddings", `{"bad":"json"}`)
+		r := doReqRaw(gatewayURL, apiKey, "POST", "/v1/embeddings", `{invalid json}`)
 		assertStatus(t, "invalid body", r.Status, 400)
 	})
 }
@@ -491,11 +541,11 @@ func TestUsageTracking(t *testing.T) {
 	t.Run("recorded", func(t *testing.T) {
 		r := adminReq("GET", fmt.Sprintf("/admin/v1/usage?tenant_id=%s", tid), nil)
 		assertStatus(t, "usage", r.Status, 200)
-		summary, _ := r.mapBody()["summary"].(map[string]interface{})
-		if int(summary["total_requests"].(float64)) != 1 {
+		summary := getMap(t, r.mapBody(), "summary")
+		if int(getFloat(t, summary, "total_requests")) != 1 {
 			t.Errorf("usage: total_requests = %v, want 1", summary["total_requests"])
 		}
-		if int(summary["total_tokens"].(float64)) != 35 {
+		if int(getFloat(t, summary, "total_tokens")) != 35 {
 			t.Errorf("usage: total_tokens = %v, want 35", summary["total_tokens"])
 		}
 	})
@@ -504,25 +554,178 @@ func TestUsageTracking(t *testing.T) {
 		proxyReq(apiKey, "POST", "/v1/embeddings", map[string]interface{}{
 			"model": "text-embedding-ada-002", "input": "test",
 		})
-		waitForUsage()
+		waitForUsageCount(tid, 2)
 		r := adminReq("GET", fmt.Sprintf("/admin/v1/usage?tenant_id=%s&group_by=model", tid), nil)
-		assertStatus(t, "group by", r.Status, 200)
-		groups := r.mapBody()["groups"].([]interface{})
+		assertStatus(t, "group by model", r.Status, 200)
+		groups := getArray(t, r.mapBody(), "groups")
+		if len(groups) != 2 {
+			t.Fatalf("group by model: groups length = %d, want 2", len(groups))
+		}
+		groupMap := make(map[string]map[string]interface{})
+		for _, g := range groups {
+			gm, _ := g.(map[string]interface{})
+			model, _ := gm["model"].(string)
+			groupMap[model] = gm
+		}
+		gpt4, ok := groupMap["gpt-4"]
+		if !ok {
+			t.Fatal("group by model: missing gpt-4 group")
+		}
+		if int(getFloat(t, gpt4, "requests")) != 1 {
+			t.Errorf("gpt-4: requests = %v, want 1", gpt4["requests"])
+		}
+		if int(getFloat(t, gpt4, "total_tokens")) != 35 {
+			t.Errorf("gpt-4: total_tokens = %v, want 35", gpt4["total_tokens"])
+		}
+		if int(getFloat(t, gpt4, "prompt_tokens")) != 15 {
+			t.Errorf("gpt-4: prompt_tokens = %v, want 15", gpt4["prompt_tokens"])
+		}
+		if int(getFloat(t, gpt4, "completion_tokens")) != 20 {
+			t.Errorf("gpt-4: completion_tokens = %v, want 20", gpt4["completion_tokens"])
+		}
+		embed, ok := groupMap["text-embedding-ada-002"]
+		if !ok {
+			t.Fatal("group by model: missing text-embedding-ada-002 group")
+		}
+		if int(getFloat(t, embed, "requests")) != 1 {
+			t.Errorf("embed: requests = %v, want 1", embed["requests"])
+		}
+		if int(getFloat(t, embed, "total_tokens")) != 8 {
+			t.Errorf("embed: total_tokens = %v, want 8", embed["total_tokens"])
+		}
+	})
+
+	t.Run("group_by_day", func(t *testing.T) {
+		r := adminReq("GET", fmt.Sprintf("/admin/v1/usage?tenant_id=%s&group_by=day", tid), nil)
+		assertStatus(t, "group by day", r.Status, 200)
+		groups := getArray(t, r.mapBody(), "groups")
+		if len(groups) != 1 {
+			t.Fatalf("group by day: groups length = %d, want 1", len(groups))
+		}
+		gm, _ := groups[0].(map[string]interface{})
+		date, _ := gm["date"].(string)
+		if date == "" {
+			t.Error("group by day: date field should be non-empty")
+		}
+		if int(getFloat(t, gm, "requests")) != 2 {
+			t.Errorf("group by day: requests = %v, want 2", gm["requests"])
+		}
+	})
+
+	t.Run("group_by_tenant", func(t *testing.T) {
+		r := adminReq("GET", "/admin/v1/usage?group_by=tenant", nil)
+		assertStatus(t, "group by tenant", r.Status, 200)
+		groups := getArray(t, r.mapBody(), "groups")
 		if len(groups) < 1 {
-			t.Errorf("group by: groups length = %d, want >= 1", len(groups))
+			t.Fatalf("group by tenant: groups length = %d, want >= 1", len(groups))
+		}
+		found := false
+		for _, g := range groups {
+			gm, _ := g.(map[string]interface{})
+			if gm["tenant_id"] == tid {
+				found = true
+				if int(getFloat(t, gm, "requests")) != 2 {
+					t.Errorf("group by tenant: requests = %v, want 2", gm["requests"])
+				}
+			}
+		}
+		if !found {
+			t.Errorf("group by tenant: tenant %s not found in groups", tid)
+		}
+	})
+
+	t.Run("time_range", func(t *testing.T) {
+		now := time.Now().UTC()
+		start := now.Add(-1 * time.Hour).Format(time.RFC3339)
+		end := now.Add(1 * time.Hour).Format(time.RFC3339)
+		r := adminReq("GET", fmt.Sprintf("/admin/v1/usage?tenant_id=%s&start=%s&end=%s", tid, start, end), nil)
+		assertStatus(t, "time range in", r.Status, 200)
+		summary, _ := r.mapBody()["summary"].(map[string]interface{})
+		if int(getFloat(t, summary, "total_requests")) != 2 {
+			t.Errorf("time range in: total_requests = %v, want 2", summary["total_requests"])
+		}
+
+		futureStart := now.Add(1 * time.Hour).Format(time.RFC3339)
+		r2 := adminReq("GET", fmt.Sprintf("/admin/v1/usage?tenant_id=%s&start=%s", tid, futureStart), nil)
+		assertStatus(t, "time range future", r2.Status, 200)
+		summary2, _ := r2.mapBody()["summary"].(map[string]interface{})
+		if int(getFloat(t, summary2, "total_requests")) != 0 {
+			t.Errorf("time range future: total_requests = %v, want 0", summary2["total_requests"])
+		}
+	})
+
+	t.Run("pagination", func(t *testing.T) {
+		r := adminReq("GET", fmt.Sprintf("/admin/v1/usage?tenant_id=%s&group_by=model&page=1&page_size=1", tid), nil)
+		assertStatus(t, "page1", r.Status, 200)
+		groups := getArray(t, r.mapBody(), "groups")
+		if len(groups) != 1 {
+			t.Errorf("page1: groups length = %d, want 1", len(groups))
+		}
+		total, _ := r.mapBody()["total"].(float64)
+		if int(total) != 2 {
+			t.Errorf("page1: total = %v, want 2", total)
+		}
+		if int(r.mapBody()["page"].(float64)) != 1 {
+			t.Errorf("page1: page = %v, want 1", r.mapBody()["page"])
+		}
+		if int(r.mapBody()["page_size"].(float64)) != 1 {
+			t.Errorf("page1: page_size = %v, want 1", r.mapBody()["page_size"])
+		}
+
+		r2 := adminReq("GET", fmt.Sprintf("/admin/v1/usage?tenant_id=%s&group_by=model&page=2&page_size=1", tid), nil)
+		assertStatus(t, "page2", r2.Status, 200)
+		groups2 := getArray(t, r2.mapBody(), "groups")
+		if len(groups2) != 1 {
+			t.Errorf("page2: groups length = %d, want 1", len(groups2))
+		}
+
+		r3 := adminReq("GET", fmt.Sprintf("/admin/v1/usage?tenant_id=%s&group_by=model&page=3&page_size=1", tid), nil)
+		assertStatus(t, "page3", r3.Status, 200)
+		groups3 := r3.mapBody()["groups"]
+		if groups3 != nil {
+			arr, _ := groups3.([]interface{})
+			if len(arr) != 0 {
+				t.Errorf("page3: groups length = %d, want 0", len(arr))
+			}
+		}
+	})
+
+	t.Run("csv_export", func(t *testing.T) {
+		r := adminReq("GET", fmt.Sprintf("/admin/v1/usage?tenant_id=%s&group_by=model&format=csv", tid), nil)
+		assertStatus(t, "csv", r.Status, 200)
+		ct := r.Header.Get("Content-Type")
+		if ct == "" || !contains(ct, "text/csv") {
+			t.Errorf("csv: Content-Type = %q, want text/csv", ct)
+		}
+		cd := r.Header.Get("Content-Disposition")
+		if cd == "" || !contains(cd, "attachment") || !contains(cd, ".csv") {
+			t.Errorf("csv: Content-Disposition = %q, want attachment; filename=usage_*.csv", cd)
+		}
+		body := r.RawBody
+		if body == "" {
+			t.Fatal("csv: response body is empty")
+		}
+		if !contains(body, "model") {
+			t.Error("csv: body should contain 'model' header")
+		}
+		if !contains(body, "gpt-4") {
+			t.Error("csv: body should contain 'gpt-4'")
+		}
+		if !contains(body, "total_requests") {
+			t.Error("csv: body should contain summary section with 'total_requests'")
 		}
 	})
 
 	t.Run("filter_by_key", func(t *testing.T) {
 		_, key2 := createKey(tid, "Second Key", model.Scopes{})
 		proxyReq(key2, "POST", "/v1/chat/completions", chatBody)
-		waitForUsage()
+		waitForUsageCount(tid, 3)
 
 		keyID := getKeyID(tid, "Second Key")
 		r := adminReq("GET", fmt.Sprintf("/admin/v1/usage?key_id=%s", keyID), nil)
 		assertStatus(t, "filter by key", r.Status, 200)
 		summary, _ := r.mapBody()["summary"].(map[string]interface{})
-		if int(summary["total_requests"].(float64)) < 1 {
+		if int(getFloat(t, summary, "total_requests")) < 1 {
 			t.Errorf("filter by key: total_requests = %v, want >= 1", summary["total_requests"])
 		}
 	})
@@ -533,7 +736,7 @@ func TestUsageTracking(t *testing.T) {
 		r := adminReq("GET", "/admin/v1/usage", nil)
 		assertStatus(t, "empty", r.Status, 200)
 		summary, _ := r.mapBody()["summary"].(map[string]interface{})
-		if int(summary["total_requests"].(float64)) != 0 {
+		if int(getFloat(t, summary, "total_requests")) != 0 {
 			t.Errorf("empty: total_requests = %v, want 0", summary["total_requests"])
 		}
 	})
@@ -564,7 +767,7 @@ func TestEndToEndFlow(t *testing.T) {
 
 	r := adminReq("POST", "/admin/v1/tenants", map[string]string{"name": "E2E Flow Tenant"})
 	assertStatus(t, "create tenant", r.Status, 201)
-	tid := r.mapBody()["id"].(string)
+	tid, _ := r.mapBody()["id"].(string)
 
 	r = adminReq("POST", "/admin/v1/tenants/"+tid+"/keys", map[string]interface{}{
 		"name":   "E2E Flow Key",
@@ -572,8 +775,8 @@ func TestEndToEndFlow(t *testing.T) {
 	})
 	assertStatus(t, "create key", r.Status, 201)
 	m := r.mapBody()
-	apiKey := m["key"].(string)
-	keyID := m["id"].(string)
+	apiKey, _ := m["key"].(string)
+	keyID, _ := m["id"].(string)
 
 	chatR := proxyReq(apiKey, "POST", "/v1/chat/completions", map[string]interface{}{
 		"model":    "gpt-4",
@@ -595,7 +798,7 @@ func TestEndToEndFlow(t *testing.T) {
 	usageR := adminReq("GET", fmt.Sprintf("/admin/v1/usage?tenant_id=%s&group_by=model", tid), nil)
 	assertStatus(t, "usage query", usageR.Status, 200)
 	summary, _ := usageR.mapBody()["summary"].(map[string]interface{})
-	if int(summary["total_requests"].(float64)) != 2 {
+	if int(getFloat(t, summary, "total_requests")) != 2 {
 		t.Errorf("usage: total_requests = %v, want 2", summary["total_requests"])
 	}
 	groups := usageR.mapBody()["groups"].([]interface{})
