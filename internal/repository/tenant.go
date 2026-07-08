@@ -42,7 +42,15 @@ func (s *TenantStore) Update(t *model.Tenant) error {
 	return s.db.Model(t).Select("name", "status").Updates(t).Error
 }
 
-// Delete 删除租户（硬删除）。
+// Delete 删除租户及其关联的所有 API Key（硬删除，在事务中执行）。
 func (s *TenantStore) Delete(id string) error {
-	return s.db.Delete(&model.Tenant{}, "id = ?", id).Error
+	return s.db.Transaction(func(tx *gorm.DB) error {
+		if err := tx.Delete(&model.APIKey{}, "tenant_id = ?", id).Error; err != nil {
+			return err
+		}
+		if err := tx.Delete(&model.Tenant{}, "id = ?", id).Error; err != nil {
+			return err
+		}
+		return nil
+	})
 }

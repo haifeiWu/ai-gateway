@@ -179,7 +179,7 @@ func (h *ProxyHandler) doProxy(endpoint string, body []byte, modelName string,
 // proxyStream 处理 SSE 流式请求：转发到下游，逐 chunk 透传给客户端，流结束后记录用量。
 func (h *ProxyHandler) proxyStream(body []byte, modelName string, key *model.APIKey, c *gin.Context) {
 	url := h.mockURL + "/v1/chat/completions"
-	req, err := http.NewRequest(http.MethodPost, url, bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(c.Request.Context(), http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		writeError(c, http.StatusInternalServerError, "create request failed", "server_error")
 		return
@@ -288,6 +288,13 @@ func (h *ProxyHandler) Models(c *gin.Context) {
 	if !h.checkRateLimit(key, c) {
 		return
 	}
+
+	// 设置 X-Request-ID 响应头
+	requestID := c.GetString("request_id")
+	if requestID == "" {
+		requestID = uuid.NewString()
+	}
+	c.Header("X-Request-ID", requestID)
 
 	resp, statusCode, err := h.forward("/v1/models", nil)
 	if err != nil {

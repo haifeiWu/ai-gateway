@@ -21,7 +21,7 @@ type Config struct {
 // Load 从环境变量加载配置。AdminToken 为必填项，拒绝默认值。
 func Load() (*Config, error) {
 	token := os.Getenv("ADMIN_TOKEN")
-	if token == "" || token == "admin-secret-token" {
+	if token == "" || token == "admin-secret-token" || token == "change-me-to-a-secure-random-value" {
 		slog.Error("ADMIN_TOKEN 未设置或使用了默认值，必须设置非默认值")
 		return nil, fmt.Errorf("ADMIN_TOKEN must be set and must not be the default value")
 	}

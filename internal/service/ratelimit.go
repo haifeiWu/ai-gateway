@@ -9,6 +9,7 @@ import (
 type RateLimiter struct {
 	mu      sync.Mutex
 	windows map[string]*rateWindow
+	closed  chan struct{}
 }
 
 type rateWindow struct {
@@ -20,15 +21,26 @@ type rateWindow struct {
 func NewRateLimiter() *RateLimiter {
 	rl := &RateLimiter{
 		windows: make(map[string]*rateWindow),
+		closed:  make(chan struct{}),
 	}
 	go func() {
 		ticker := time.NewTicker(5 * time.Minute)
 		defer ticker.Stop()
-		for range ticker.C {
-			rl.CleanupExpired()
+		for {
+			select {
+			case <-ticker.C:
+				rl.CleanupExpired()
+			case <-rl.closed:
+				return
+			}
 		}
 	}()
 	return rl
+}
+
+// Close 停止后台清理 goroutine。
+func (rl *RateLimiter) Close() {
+	close(rl.closed)
 }
 
 // Allow 检查 key_id 是否允许通过。rpm 为 0 表示不限流。

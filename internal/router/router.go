@@ -10,8 +10,8 @@ import (
 	"gorm.io/gorm"
 )
 
-// Setup 注册所有路由并返回 Gin engine。
-func Setup(db *gorm.DB, cfg *config.Config, usageWriter *service.UsageWriter) *gin.Engine {
+// Setup 注册所有路由并返回 Gin engine 和限流器（调用方需在退出前 Close 限流器）。
+func Setup(db *gorm.DB, cfg *config.Config, usageWriter *service.UsageWriter) (*gin.Engine, *service.RateLimiter, *service.RateLimiter) {
 	gin.SetMode(gin.ReleaseMode)
 
 	// 初始化各层
@@ -66,5 +66,5 @@ func Setup(db *gorm.DB, cfg *config.Config, usageWriter *service.UsageWriter) *g
 		proxy.GET("/models", proxyH.Models)
 	}
 
-	return r
+	return r, rateLimiter, adminLimiter
 }

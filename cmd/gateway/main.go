@@ -1,12 +1,14 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 
 	"github.com/ai-gateway/internal/config"
 	"github.com/ai-gateway/internal/model"
@@ -51,7 +53,7 @@ func main() {
 	usageWriter := service.NewUsageWriter(repository.NewUsageStore(db))
 
 	// 路由
-	r := router.Setup(db, cfg, usageWriter)
+	r, proxyLimiter, adminLimiter := router.Setup(db, cfg, usageWriter)
 
 	// 优雅关闭
 	srv := &http.Server{
@@ -59,13 +61,19 @@ func main() {
 		Handler: r,
 	}
 
+	quit := make(chan os.Signal, 1)
+	signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
+
 	go func() {
-		quit := make(chan os.Signal, 1)
-		signal.Notify(quit, syscall.SIGINT, syscall.SIGTERM)
 		<-quit
 		slog.Info("shutting down server...")
-		usageWriter.Shutdown()
-		sqlDB.Close()
+
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if err := srv.Shutdown(ctx); err != nil {
+			slog.Error("server forced to shutdown", "error", err)
+		}
 	}()
 
 	slog.Info("gateway starting", "addr", cfg.ListenAddr)
@@ -73,4 +81,11 @@ func main() {
 		slog.Error("server error", "error", err)
 		os.Exit(1)
 	}
+
+	// 服务器已停止接收新请求，在途请求处理完成后清理资源
+	usageWriter.Shutdown()
+	proxyLimiter.Close()
+	adminLimiter.Close()
+	sqlDB.Close()
+	slog.Info("server stopped")
 }

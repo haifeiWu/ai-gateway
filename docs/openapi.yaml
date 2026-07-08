@@ -341,7 +341,7 @@ components:
           nullable: true
         stream:
           type: boolean
-          description: 是否流式返回（MVP 下游不支持流式，传 true 时返回普通 JSON 响应）
+          description: 是否流式返回（true 时返回 SSE 事件流，false 返回普通 JSON 响应）
           default: false
 
     ChatCompletionResponse:

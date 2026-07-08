@@ -48,6 +48,7 @@
         <div class="form-row">
           <select id="keyTenant"></select>
           <input type="text" id="keyName" placeholder="Key 名称" />
+          <input type="datetime-local" id="keyExpires" title="过期时间（可选）" />
           <button onclick="createKey()">创建</button>
         </div>
         <details>
@@ -56,7 +57,6 @@
             <label>允许模型（逗号分隔）：<input type="text" id="scopeModels" placeholder="gpt-4,gpt-3.5-turbo" /></label>
             <label>允许端点（逗号分隔）：<input type="text" id="scopeEndpoints" placeholder="/v1/chat/completions" /></label>
             <label>Rate Limit (RPM)：<input type="number" id="scopeRPM" value="0" min="0" /></label>
-            <label>过期时间：<input type="datetime-local" id="scopeExpires" /></label>
           </div>
         </details>
       </div>
@@ -82,6 +82,9 @@
           <select id="usageGroupBy">
             <option value="">不分组</option>
             <option value="model">按模型分组</option>
+            <option value="day">按天分组</option>
+            <option value="hour">按小时分组</option>
+            <option value="tenant">按租户分组</option>
           </select>
           <button onclick="queryUsage()">查询</button>
         </div>

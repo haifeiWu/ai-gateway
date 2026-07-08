@@ -3,6 +3,7 @@ package middleware
 import (
 	"crypto/subtle"
 	"net/http"
+	"strings"
 
 	"github.com/gin-gonic/gin"
 )
@@ -18,7 +19,7 @@ func AdminAuth(adminToken string) gin.HandlerFunc {
 			return
 		}
 		token := ""
-		if len(auth) > 7 && auth[:7] == "Bearer " {
+		if len(auth) > 7 && strings.EqualFold(auth[:7], "Bearer ") {
 			token = auth[7:]
 		} else {
 			token = auth

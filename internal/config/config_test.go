@@ -1,13 +1,11 @@
 package config
 
 import (
-	"os"
 	"testing"
 )
 
 func TestLoad_validToken(t *testing.T) {
-	os.Setenv("ADMIN_TOKEN", "my-secure-token")
-	defer os.Unsetenv("ADMIN_TOKEN")
+	t.Setenv("ADMIN_TOKEN", "my-secure-token")
 
 	cfg, err := Load()
 	if err != nil {
@@ -39,8 +37,7 @@ func TestLoad_validToken(t *testing.T) {
 }
 
 func TestLoad_defaultToken_rejected(t *testing.T) {
-	os.Setenv("ADMIN_TOKEN", "admin-secret-token")
-	defer os.Unsetenv("ADMIN_TOKEN")
+	t.Setenv("ADMIN_TOKEN", "admin-secret-token")
 
 	_, err := Load()
 	if err == nil {
@@ -49,7 +46,7 @@ func TestLoad_defaultToken_rejected(t *testing.T) {
 }
 
 func TestLoad_emptyToken_rejected(t *testing.T) {
-	os.Unsetenv("ADMIN_TOKEN")
+	// t.Setenv 不设置 ADMIN_TOKEN，环境变量为空
 
 	_, err := Load()
 	if err == nil {
@@ -58,12 +55,8 @@ func TestLoad_emptyToken_rejected(t *testing.T) {
 }
 
 func TestLoad_fromEnv(t *testing.T) {
-	os.Setenv("ADMIN_TOKEN", "test-token")
-	os.Setenv("DB_HOST", "test-db")
-	defer func() {
-		os.Unsetenv("ADMIN_TOKEN")
-		os.Unsetenv("DB_HOST")
-	}()
+	t.Setenv("ADMIN_TOKEN", "test-token")
+	t.Setenv("DB_HOST", "test-db")
 
 	cfg, err := Load()
 	if err != nil {

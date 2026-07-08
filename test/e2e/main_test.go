@@ -58,13 +58,15 @@ func run(m *testing.M) int {
 		AdminToken:      testAdminToken,
 		MockProviderURL: mockSrv.URL,
 	}
-	r := router.Setup(db, cfg, usageWriter)
+	r, proxyLimiter, adminLimiter := router.Setup(db, cfg, usageWriter)
 	gatewaySrv = httptest.NewServer(r)
 	gatewayURL = gatewaySrv.URL
 
 	code := m.Run()
 
 	usageWriter.Shutdown()
+	proxyLimiter.Close()
+	adminLimiter.Close()
 	gatewaySrv.Close()
 	mockSrv.Close()
 	cleanDB()
@@ -175,7 +177,7 @@ func cleanDB() {
 func setupGatewayWithMockURL(mockURL string) (*httptest.Server, *service.UsageWriter) {
 	uw := service.NewUsageWriter(repository.NewUsageStore(db))
 	cfg := &config.Config{AdminToken: testAdminToken, MockProviderURL: mockURL}
-	r := router.Setup(db, cfg, uw)
+	r, _, _ := router.Setup(db, cfg, uw)
 	return httptest.NewServer(r), uw
 }
 
@@ -271,7 +273,18 @@ func getKeyID(tenantID, keyName string) string {
 }
 
 func waitForUsage() {
-	time.Sleep(6 * time.Second)
+	// 轮询 usage API 直到有数据或超时（最多 10 秒）
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		resp := adminReq("GET", "/admin/v1/usage", nil)
+		if resp.Status == 200 {
+			summary, _ := resp.mapBody()["summary"].(map[string]interface{})
+			if total, _ := summary["total_requests"].(float64); total > 0 {
+				return
+			}
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
 }
 
 func assertStatus(t *testing.T, label string, got, want int) {

@@ -104,7 +104,7 @@ func TestKeyManagement(t *testing.T) {
 		assertStatus(t, "create", r.Status, 201)
 		m := r.mapBody()
 		key, _ := m["key"].(string)
-		if len(key) != 40 || key[:7] != "sk-agw-" {
+		if len(key) != 39 || key[:7] != "sk-agw-" {
 			t.Errorf("create: key = %q, want sk-agw- prefix, 40 chars", key)
 		}
 		prefix, _ := m["key_prefix"].(string)

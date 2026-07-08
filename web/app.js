@@ -121,7 +121,7 @@ function createKey() {
   const models = document.getElementById('scopeModels').value.trim();
   const endpoints = document.getElementById('scopeEndpoints').value.trim();
   const rpm = parseInt(document.getElementById('scopeRPM').value) || 0;
-  const expires = document.getElementById('scopeExpires').value;
+  const expires = document.getElementById('keyExpires').value;
 
   if (models) scopes.allowed_models = models.split(',').map(s => s.trim()).filter(Boolean);
   if (endpoints) scopes.allowed_endpoints = endpoints.split(',').map(s => s.trim()).filter(Boolean);

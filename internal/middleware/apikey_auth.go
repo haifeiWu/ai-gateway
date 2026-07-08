@@ -31,7 +31,7 @@ func APIKeyAuth(keySvc KeyLookup, tenantSvc TenantStatusGetter) gin.HandlerFunc 
 		}
 
 		rawKey := extractBearer(auth)
-		if rawKey == "" || !strings.HasPrefix(rawKey, "sk-agw-") || len(rawKey) < 12 {
+		if rawKey == "" || !strings.HasPrefix(rawKey, "sk-agw-") || len(rawKey) < 39 {
 			writeAuthError(c, http.StatusUnauthorized, "invalid API key format", "auth_error")
 			return
 		}
@@ -77,12 +77,6 @@ func writeAuthError(c *gin.Context, code int, message, errType string) {
 	c.AbortWithStatusJSON(code, gin.H{
 		"error": gin.H{"message": message, "type": errType},
 	})
-}
-
-// writeError 写入 OpenAI 兼容的错误响应。
-// Deprecated: 使用 writeAuthError 替代，保证原子操作。
-func writeError(c *gin.Context, code int, message, errType string) {
-	writeAuthError(c, code, message, errType)
 }
 
 // extractBearer 从 Authorization header 提取 Bearer token。
